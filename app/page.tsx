@@ -1356,7 +1356,7 @@ function AssistantIntro({ user }: { user: AuthUser }) {
         <ShieldCheck className="h-10 w-10" strokeWidth={2.2} />
       </div>
       <h3 className="mt-6 text-[22px] font-medium leading-8 text-[#151a18]">
-        Stewardship Assistant
+        Forestry Intelligence System
       </h3>
       <p className="mt-3 text-[17px] leading-6 text-[#2d3331]">
         Ask questions over indexed PDF, DOCX, and TXT department sources.

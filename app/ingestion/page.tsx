@@ -20,15 +20,19 @@ import {
 } from "../../lib/auth-client";
 import {
   API_BASE_URL,
+  ApiError,
   AuthState,
   AuthUser,
   ChunkPreview,
+  DocumentUpload,
   IngestJob,
   PreviewChunk,
+  completeDocumentUploads,
   getChunkPreview,
   getIngestJob,
+  presignDocumentUploads,
   startIngest,
-  uploadDocument,
+  uploadDocuments,
 } from "../../lib/api";
 
 function canManageDocuments(user: AuthUser | null) {
@@ -65,6 +69,79 @@ function formatIngestSummary(job: IngestJob) {
   return `Indexed ${job.result.documents_added} new document(s), skipped ${job.result.documents_skipped} already indexed document(s), added ${job.result.chunks_added} chunk(s).`;
 }
 
+type UploadStatus =
+  | "queued"
+  | "presigning"
+  | "uploading"
+  | "completing"
+  | "done"
+  | "failed";
+
+type UploadRow = {
+  key: string;
+  filename: string;
+  status: UploadStatus;
+  detail?: string;
+};
+
+type UploadQueueItem = UploadRow & {
+  file: File;
+};
+
+function fileKey(file: File, index: number) {
+  return `${file.name}-${file.size}-${file.lastModified}-${index}`;
+}
+
+function uploadStatusLabel(status: UploadStatus) {
+  switch (status) {
+    case "queued":
+      return "Queued";
+    case "presigning":
+      return "Preparing";
+    case "uploading":
+      return "Uploading";
+    case "completing":
+      return "Completing";
+    case "done":
+      return "Done";
+    case "failed":
+      return "Failed";
+  }
+}
+
+function isNonR2StorageConfigError(err: unknown) {
+  if (!(err instanceof ApiError)) {
+    return false;
+  }
+
+  const message = err.message.toLowerCase();
+  const code = err.code.toLowerCase();
+  const referencesBackend = message.includes("document_storage_backend");
+  const referencesR2Mismatch =
+    message.includes("not r2") || message.includes("must be r2");
+  return (
+    referencesBackend &&
+    referencesR2Mismatch &&
+    (code.includes("config") || err.status === 400 || err.status === 422)
+  );
+}
+
+async function putFileToStorage(upload: DocumentUpload, file: File) {
+  const response = await fetch(upload.upload_url, {
+    method: upload.method,
+    headers: upload.headers,
+    body: file,
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(
+      text ||
+        `Storage upload failed for ${file.name}: ${response.status} ${response.statusText}`,
+    );
+  }
+}
+
 export default function IngestionPage() {
   const [auth, setAuth] = useState<AuthState | null>(null);
   const [user, setUser] = useState<AuthUser | null>(null);
@@ -76,6 +153,8 @@ export default function IngestionPage() {
   const [uploading, setUploading] = useState(false);
   const [ingesting, setIngesting] = useState(false);
   const [previewing, setPreviewing] = useState(false);
+  const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
+  const [uploadRows, setUploadRows] = useState<UploadRow[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   async function getToken() {
@@ -138,13 +217,116 @@ export default function IngestionPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  async function uploadFile(file: File | null) {
-    if (!file || uploading || !canManageDocuments(user)) {
+  function selectFiles(fileList: FileList | null) {
+    const files = Array.from(fileList ?? []);
+    setSelectedFiles(files);
+    setUploadRows(
+      files.map((file, index) => ({
+        key: fileKey(file, index),
+        filename: file.name,
+        status: "queued",
+      })),
+    );
+    setNotice(null);
+    setError(null);
+  }
+
+  function updateUploadRows(
+    keys: string[],
+    status: UploadStatus,
+    detail?: string,
+  ) {
+    setUploadRows((rows) =>
+      rows.map((row) =>
+        keys.includes(row.key) ? { ...row, status, detail } : row,
+      ),
+    );
+  }
+
+  async function uploadWithMultipartFallback(token: string, files: File[]) {
+    const keys = files.map(fileKey);
+    updateUploadRows(keys, "uploading", "Using server upload");
+    const response = await uploadDocuments(token, files);
+    updateUploadRows(keys, "done", "Uploaded through server");
+    return response.files.map((file) => file.filename);
+  }
+
+  async function uploadWithDirectR2(token: string, files: File[]) {
+    const queueItems: UploadQueueItem[] = files.map((file, index) => ({
+      key: fileKey(file, index),
+      file,
+      filename: file.name,
+      status: "queued",
+    }));
+    const keys = queueItems.map((item) => item.key);
+
+    updateUploadRows(keys, "presigning");
+    const { uploads } = await presignDocumentUploads(
+      token,
+      files.map((file) => ({
+        filename: file.name,
+        size_bytes: file.size,
+        content_type: file.type || "application/octet-stream",
+      })),
+    );
+
+    const filesByName = new Map<string, UploadQueueItem[]>();
+    for (const item of queueItems) {
+      filesByName.set(item.filename, [
+        ...(filesByName.get(item.filename) ?? []),
+        item,
+      ]);
+    }
+
+    const uploadPairs = uploads.map((upload) => {
+      const matches = filesByName.get(upload.filename) ?? [];
+      const item = matches.shift();
+      filesByName.set(upload.filename, matches);
+      if (!item) {
+        throw new Error(`Unable to match presigned upload for ${upload.filename}.`);
+      }
+      return { item, upload };
+    });
+
+    await Promise.all(
+      uploadPairs.map(async ({ item, upload }) => {
+        updateUploadRows([item.key], "uploading");
+        try {
+          await putFileToStorage(upload, item.file);
+        } catch (err) {
+          updateUploadRows(
+            [item.key],
+            "failed",
+            formatApiError(err, "Unable to upload document."),
+          );
+          throw err;
+        }
+        updateUploadRows([item.key], "completing");
+      }),
+    );
+
+    await completeDocumentUploads(
+      token,
+      uploads.map((upload) => ({
+        upload_id: upload.upload_id,
+        filename: upload.filename,
+      })),
+    );
+
+    updateUploadRows(keys, "done");
+    return uploads.map((upload) => upload.filename);
+  }
+
+  async function uploadSelectedFiles() {
+    if (selectedFiles.length === 0 || uploading || !canManageDocuments(user)) {
       return;
     }
 
-    const extension = file.name.toLowerCase().split(".").pop();
-    if (extension !== "pdf" && extension !== "docx" && extension !== "txt") {
+    const unsupportedFile = selectedFiles.find((file) => {
+      const extension = file.name.toLowerCase().split(".").pop();
+      return extension !== "pdf" && extension !== "docx" && extension !== "txt";
+    });
+    if (unsupportedFile) {
       setError("Only .pdf, .docx, and .txt files are supported.");
       return;
     }
@@ -154,15 +336,35 @@ export default function IngestionPage() {
     setUploading(true);
     try {
       const token = await getToken();
-      await uploadDocument(token, file);
-      setNotice("Upload complete. Run ingest to make this document searchable.");
+      let uploadedFilenames: string[];
+      try {
+        uploadedFilenames = await uploadWithDirectR2(token, selectedFiles);
+      } catch (err) {
+        if (!isNonR2StorageConfigError(err)) {
+          const selectedKeys = selectedFiles.map(fileKey);
+          updateUploadRows(
+            selectedKeys,
+            "failed",
+            formatApiError(err, "Unable to upload document."),
+          );
+          throw err;
+        }
+
+        uploadedFilenames = await uploadWithMultipartFallback(token, selectedFiles);
+      }
+
+      const filenames = uploadedFilenames.join(", ");
+      setNotice(
+        `Upload complete: ${filenames}. Run ingest to index these documents before they are searchable.`,
+      );
+      setSelectedFiles([]);
+      if (fileInputRef.current) {
+        fileInputRef.current.value = "";
+      }
       await loadPreview(token);
     } catch (err) {
       setError(formatApiError(err, "Unable to upload document."));
     } finally {
-      if (fileInputRef.current) {
-        fileInputRef.current.value = "";
-      }
       setUploading(false);
     }
   }
@@ -259,9 +461,50 @@ export default function IngestionPage() {
 
               <div className="mt-5 grid gap-3">
                 <button
-                  className="inline-flex h-11 items-center justify-center gap-2 rounded bg-primary px-4 text-[14px] font-semibold text-white transition hover:bg-primary-container disabled:cursor-not-allowed disabled:opacity-60"
+                  className="inline-flex h-11 items-center justify-center gap-2 rounded border border-outline-variant bg-white px-4 text-[14px] font-semibold text-[#26384d] transition hover:bg-surface-container-low disabled:cursor-not-allowed disabled:opacity-60"
                   disabled={uploading}
                   onClick={() => fileInputRef.current?.click()}
+                  type="button"
+                >
+                  <Upload className="h-4 w-4" />
+                  Choose documents
+                </button>
+                {uploadRows.length ? (
+                  <div className="rounded border border-outline-variant bg-surface-container-lowest px-3 py-2">
+                    <p className="text-[12px] font-semibold uppercase text-[#7b8492]">
+                      Files
+                    </p>
+                    <ul className="mt-2 space-y-1 text-[13px] leading-5 text-[#323b45]">
+                      {uploadRows.map((file) => (
+                        <li className="min-w-0" key={file.key}>
+                          <div className="flex items-center justify-between gap-3">
+                            <span className="truncate">{file.filename}</span>
+                            <span
+                              className={`shrink-0 text-[12px] font-semibold ${
+                                file.status === "failed"
+                                  ? "text-[#743f2c]"
+                                  : file.status === "done"
+                                    ? "text-primary"
+                                    : "text-[#626b79]"
+                              }`}
+                            >
+                              {uploadStatusLabel(file.status)}
+                            </span>
+                          </div>
+                          {file.detail ? (
+                            <p className="truncate text-[12px] text-[#626b79]">
+                              {file.detail}
+                            </p>
+                          ) : null}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
+                <button
+                  className="inline-flex h-11 items-center justify-center gap-2 rounded bg-primary px-4 text-[14px] font-semibold text-white transition hover:bg-primary-container disabled:cursor-not-allowed disabled:opacity-60"
+                  disabled={uploading || selectedFiles.length === 0}
+                  onClick={() => void uploadSelectedFiles()}
                   type="button"
                 >
                   {uploading ? (
@@ -269,11 +512,11 @@ export default function IngestionPage() {
                   ) : (
                     <Upload className="h-4 w-4" />
                   )}
-                  Upload document
+                  {uploading ? "Uploading..." : "Upload selected"}
                 </button>
                 <button
                   className="inline-flex h-11 items-center justify-center gap-2 rounded border border-outline-variant bg-white px-4 text-[14px] font-semibold text-[#26384d] transition hover:bg-surface-container-low disabled:cursor-not-allowed disabled:opacity-60"
-                  disabled={ingesting}
+                  disabled={ingesting || uploading}
                   onClick={() => void ingestDocuments()}
                   type="button"
                 >
@@ -286,7 +529,7 @@ export default function IngestionPage() {
                 </button>
                 <button
                   className="inline-flex h-11 items-center justify-center gap-2 rounded border border-outline-variant bg-white px-4 text-[14px] font-semibold text-[#26384d] transition hover:bg-surface-container-low disabled:cursor-not-allowed disabled:opacity-60"
-                  disabled={previewing}
+                  disabled={previewing || uploading}
                   onClick={() => void loadPreview()}
                   type="button"
                 >
@@ -367,9 +610,11 @@ export default function IngestionPage() {
         )}
 
         <input
-          accept=".pdf,.docx,.txt,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain"
+          accept=".pdf,.docx,.txt"
           className="hidden"
-          onChange={(event) => void uploadFile(event.target.files?.[0] ?? null)}
+          disabled={uploading}
+          multiple
+          onChange={(event) => selectFiles(event.target.files)}
           ref={fileInputRef}
           type="file"
         />

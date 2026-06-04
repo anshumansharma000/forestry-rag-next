@@ -135,6 +135,20 @@ export type AuditEvent = {
   created_at: string;
 };
 
+export type DocumentUploadPresignFile = {
+  filename: string;
+  size_bytes: number;
+  content_type: string;
+};
+
+export type DocumentUpload = {
+  upload_id: string;
+  filename: string;
+  upload_url: string;
+  method: string;
+  headers: Record<string, string>;
+};
+
 type RequestOptions = RequestInit & {
   token?: string | null;
 };
@@ -388,6 +402,46 @@ export function uploadDocument(token: string, file: File) {
       body: formData,
     },
   );
+}
+
+export function uploadDocuments(token: string, files: File[]) {
+  const formData = new FormData();
+  for (const file of files) {
+    formData.append("files", file);
+  }
+  return apiRequest<{
+    status: "ok";
+    files: { status: "ok"; filename: string; path: string }[];
+  }>("/documents/uploads", {
+    method: "POST",
+    token,
+    body: formData,
+  });
+}
+
+export function presignDocumentUploads(
+  token: string,
+  files: DocumentUploadPresignFile[],
+) {
+  return apiRequest<{ uploads: DocumentUpload[] }>("/documents/uploads/presign", {
+    method: "POST",
+    token,
+    body: JSON.stringify({ files }),
+  });
+}
+
+export function completeDocumentUploads(
+  token: string,
+  uploads: Pick<DocumentUpload, "upload_id" | "filename">[],
+) {
+  return apiRequest<{
+    status: "ok";
+    files: { status: "ok"; filename: string; path?: string }[];
+  }>("/documents/uploads/complete", {
+    method: "POST",
+    token,
+    body: JSON.stringify({ files: uploads }),
+  });
 }
 
 export function startIngest(token: string) {

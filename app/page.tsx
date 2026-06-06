@@ -4,6 +4,7 @@ import {
   AlertCircle,
   CheckCircle2,
   ChevronDown,
+  Copy,
   Database,
   FileText,
   KeyRound,
@@ -71,6 +72,8 @@ const emptyPending: PendingState = {
   send: false,
 };
 
+const DEFAULT_TOP_K = 5;
+
 function nowIso() {
   return new Date().toISOString();
 }
@@ -109,6 +112,68 @@ function pageRange(source: Source) {
     return `Page ${source.page_start}`;
   }
   return `Pages ${source.page_start}-${source.page_end}`;
+}
+
+function evidenceRoleLabel(source: Source) {
+  return source.evidence_role === "neighbor" ? "Nearby context" : "Matched";
+}
+
+function messageAbstained(message: ChatMessage) {
+  return message.metadata?.abstained === true;
+}
+
+function messageConfidence(message: ChatMessage) {
+  const confidence = message.metadata?.retrieval_confidence;
+  return typeof confidence === "number" ? confidence : null;
+}
+
+function readChatIdFromUrl() {
+  if (typeof window === "undefined") {
+    return null;
+  }
+
+  return new URL(window.location.href).searchParams.get("chat");
+}
+
+function writeChatIdToUrl(sessionId: string | null, replace = false) {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  const url = new URL(window.location.href);
+  if (sessionId) {
+    url.searchParams.set("chat", sessionId);
+  } else {
+    url.searchParams.delete("chat");
+  }
+
+  const nextUrl = `${url.pathname}${url.search}${url.hash}`;
+  if (nextUrl === `${window.location.pathname}${window.location.search}${window.location.hash}`) {
+    return;
+  }
+
+  if (replace) {
+    window.history.replaceState(null, "", nextUrl);
+  } else {
+    window.history.pushState(null, "", nextUrl);
+  }
+}
+
+async function copyTextToClipboard(text: string) {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.setAttribute("readonly", "");
+  textarea.style.position = "fixed";
+  textarea.style.left = "-9999px";
+  document.body.appendChild(textarea);
+  textarea.select();
+  document.execCommand("copy");
+  document.body.removeChild(textarea);
 }
 
 export default function Home() {
@@ -507,12 +572,15 @@ function RagAssistant({
     auth: false,
   });
   const [error, setError] = useState<string | null>(null);
-  const [topK, setTopK] = useState(5);
+  const [topK, setTopK] = useState(DEFAULT_TOP_K);
   const [searchQuery, setSearchQuery] = useState<string | null>(null);
   const [deletingSessionId, setDeletingSessionId] = useState<string | null>(
     null,
   );
   const [deletingMessageId, setDeletingMessageId] = useState<string | null>(
+    null,
+  );
+  const [retryingMessageId, setRetryingMessageId] = useState<string | null>(
     null,
   );
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -560,7 +628,19 @@ function RagAssistant({
       const token = await ensureAuth();
       const data = await listSessions(token);
       setSessions(data.sessions);
-      setActiveSessionId((current) => current ?? data.sessions[0]?.id ?? null);
+      setActiveSessionId((current) => {
+        if (!current) {
+          return null;
+        }
+
+        const sessionExists = data.sessions.some((item) => item.id === current);
+        if (!sessionExists) {
+          writeChatIdToUrl(null, true);
+          return null;
+        }
+
+        return current;
+      });
     } catch (err) {
       handleError(err, "Unable to load sessions.");
     } finally {
@@ -590,6 +670,19 @@ function RagAssistant({
   }, [loadConfig, loadSessions]);
 
   useEffect(() => {
+    const applyUrlSession = () => {
+      setActiveSessionId(readChatIdFromUrl());
+      setSearchQuery(null);
+    };
+
+    applyUrlSession();
+    window.addEventListener("popstate", applyUrlSession);
+    return () => {
+      window.removeEventListener("popstate", applyUrlSession);
+    };
+  }, []);
+
+  useEffect(() => {
     if (activeSessionId) {
       void loadMessages(activeSessionId);
     } else {
@@ -606,6 +699,7 @@ function RagAssistant({
     const session = await createSession(token, title);
     setSessions((current) => [session, ...current]);
     setActiveSessionId(session.id);
+    writeChatIdToUrl(session.id);
     return session;
   }
 
@@ -649,13 +743,19 @@ function RagAssistant({
         response.user_message,
         {
           ...response.assistant_message,
+          metadata: {
+            ...response.assistant_message.metadata,
+            retrieval_confidence: response.confidence,
+            abstained: response.abstained,
+          },
           sources:
-            response.assistant_message.sources?.length > 0
-              ? response.assistant_message.sources
-              : response.sources,
+            response.sources?.length > 0
+              ? response.sources
+              : response.assistant_message.sources,
         },
       ]);
       setActiveSessionId(response.session_id);
+      writeChatIdToUrl(response.session_id, true);
       void loadSessions();
     } catch (err) {
       setMessages((current) =>
@@ -687,8 +787,9 @@ function RagAssistant({
       const remaining = sessions.filter((item) => item.id !== sessionId);
       setSessions(remaining);
       if (sessionId === activeSessionId) {
-        setActiveSessionId(remaining[0]?.id ?? null);
+        setActiveSessionId(null);
         setMessages([]);
+        writeChatIdToUrl(null);
       }
     } catch (err) {
       handleError(err, "Unable to delete chat session.");
@@ -720,6 +821,19 @@ function RagAssistant({
     }
   }
 
+  async function retryUserMessage(message: ChatMessage) {
+    if (pending.send || message.metadata?.pending === true) {
+      return;
+    }
+
+    setRetryingMessageId(message.id);
+    try {
+      await sendMessage(message.content);
+    } finally {
+      setRetryingMessageId(null);
+    }
+  }
+
   const configReady = Boolean(
     config?.gemini_api_key_configured &&
     config?.supabase_url_configured &&
@@ -739,11 +853,13 @@ function RagAssistant({
           setActiveSessionId(null);
           setMessages([]);
           setSearchQuery(null);
+          writeChatIdToUrl(null);
           setSidebarOpen(false);
         }}
         onSelectSession={(sessionId) => {
           setActiveSessionId(sessionId);
           setSearchQuery(null);
+          writeChatIdToUrl(sessionId);
           setSidebarOpen(false);
         }}
         open={sidebarOpen}
@@ -788,9 +904,11 @@ function RagAssistant({
           deletingMessageId={deletingMessageId}
           messages={messages}
           onDeleteUserMessage={(message) => void removeUserMessage(message)}
+          onRetryUserMessage={(message) => void retryUserMessage(message)}
           onSelectSource={setSelectedSource}
           onSend={(message) => void sendMessage(message)}
           pending={pending}
+          retryingMessageId={retryingMessageId}
           searchQuery={searchQuery}
           setTopK={setTopK}
           topK={topK}
@@ -1291,9 +1409,11 @@ function ChatWorkspace({
   deletingMessageId,
   messages,
   onDeleteUserMessage,
+  onRetryUserMessage,
   onSelectSource,
   onSend,
   pending,
+  retryingMessageId,
   searchQuery,
   setTopK,
   topK,
@@ -1303,9 +1423,11 @@ function ChatWorkspace({
   deletingMessageId: string | null;
   messages: ChatMessage[];
   onDeleteUserMessage: (message: ChatMessage) => void;
+  onRetryUserMessage: (message: ChatMessage) => void;
   onSelectSource: (source: Source) => void;
   onSend: (message: string) => void;
   pending: PendingState;
+  retryingMessageId: string | null;
   searchQuery: string | null;
   setTopK: (value: number) => void;
   topK: number;
@@ -1324,6 +1446,9 @@ function ChatWorkspace({
                 key={message.id}
                 message={message}
                 onDelete={() => onDeleteUserMessage(message)}
+                onRetry={() => onRetryUserMessage(message)}
+                retryDisabled={pending.send}
+                retrying={retryingMessageId === message.id}
               />
             ) : (
               <AssistantMessage
@@ -1417,10 +1542,16 @@ function UserMessage({
   deleting,
   message,
   onDelete,
+  onRetry,
+  retryDisabled,
+  retrying,
 }: {
   deleting: boolean;
   message: ChatMessage;
   onDelete: () => void;
+  onRetry: () => void;
+  retryDisabled: boolean;
+  retrying: boolean;
 }) {
   const pendingMessage = message.metadata?.pending === true;
 
@@ -1428,20 +1559,36 @@ function UserMessage({
     <div className="group ml-auto max-w-[840px] rounded-lg bg-surface-container-low px-5 py-[18px] text-[18px] leading-7 text-[#111516] sm:px-6">
       <div className="flex items-start gap-3">
         <p className="min-w-0 flex-1 whitespace-pre-wrap">{message.content}</p>
-        <button
-          aria-label="Delete user message"
-          className="grid h-8 w-8 shrink-0 place-items-center rounded text-[#8d5a4a] opacity-100 transition hover:bg-[#fff3ef] disabled:cursor-not-allowed disabled:opacity-50 sm:opacity-0 sm:group-hover:opacity-100 sm:focus-visible:opacity-100"
-          disabled={pendingMessage || deleting}
-          onClick={onDelete}
-          title="Delete message"
-          type="button"
-        >
-          {deleting ? (
-            <Loader2 className="h-4 w-4 animate-spin" />
-          ) : (
-            <Trash2 className="h-4 w-4" />
-          )}
-        </button>
+        <div className="flex shrink-0 items-center gap-1 opacity-100 transition sm:opacity-0 sm:group-hover:opacity-100 sm:focus-within:opacity-100">
+          <button
+            aria-label="Retry user message"
+            className="grid h-8 w-8 place-items-center rounded text-[#4e5966] transition hover:bg-white disabled:cursor-not-allowed disabled:opacity-50"
+            disabled={pendingMessage || retryDisabled}
+            onClick={onRetry}
+            title="Retry"
+            type="button"
+          >
+            {retrying ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <RefreshCw className="h-4 w-4" />
+            )}
+          </button>
+          <button
+            aria-label="Delete user message"
+            className="grid h-8 w-8 place-items-center rounded text-[#8d5a4a] transition hover:bg-[#fff3ef] disabled:cursor-not-allowed disabled:opacity-50"
+            disabled={pendingMessage || deleting}
+            onClick={onDelete}
+            title="Delete message"
+            type="button"
+          >
+            {deleting ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <Trash2 className="h-4 w-4" />
+            )}
+          </button>
+        </div>
       </div>
       {pendingMessage ? (
         <p className="mt-2 text-[12px] font-semibold uppercase text-[#7b8492]">
@@ -1459,15 +1606,66 @@ function AssistantMessage({
   message: ChatMessage;
   onSelectSource: (source: Source) => void;
 }) {
+  const abstained = messageAbstained(message);
+  const confidence = messageConfidence(message);
+  const [copied, setCopied] = useState(false);
+
+  async function handleCopy() {
+    try {
+      await copyTextToClipboard(message.content);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1800);
+    } catch {
+      setCopied(false);
+    }
+  }
+
   return (
     <div className="grid grid-cols-[42px_minmax(0,1fr)] gap-4 sm:grid-cols-[50px_minmax(0,960px)] sm:gap-5">
-      <div className="grid h-[42px] w-[42px] place-items-center rounded-lg bg-primary text-white sm:h-[50px] sm:w-[50px]">
+      <div
+        className={`grid h-[42px] w-[42px] place-items-center rounded-lg text-white sm:h-[50px] sm:w-[50px] ${
+          abstained ? "bg-[#8d5a4a]" : "bg-primary"
+        }`}
+      >
         <ShieldCheck className="h-6 w-6" strokeWidth={2.1} />
       </div>
 
       <div>
-        <article className="rounded-lg border border-[#d9dee4] bg-white px-5 py-[18px] text-[18px] leading-7 text-[#202625] shadow-tonal sm:px-[22px]">
-          <p className="whitespace-pre-wrap">{message.content}</p>
+        <article
+          className={`rounded-lg border px-5 py-[18px] text-[18px] leading-7 text-[#202625] shadow-tonal sm:px-[22px] ${
+            abstained
+              ? "border-[#e5bda9] bg-[#fff8f5]"
+              : "border-[#d9dee4] bg-white"
+          }`}
+        >
+          <div className="mb-3 flex items-start justify-between gap-3">
+            {abstained ? (
+              <div className="flex flex-wrap items-center gap-2 text-[13px] font-semibold uppercase leading-4 text-[#8d5a4a]">
+                <span>Not enough evidence</span>
+                {confidence != null ? (
+                  <span className="rounded-sm bg-[#f4d0bf] px-2 py-1 text-[12px] text-[#743f2c]">
+                    Confidence {confidence.toFixed(3)}
+                  </span>
+                ) : null}
+              </div>
+            ) : (
+              <span aria-hidden="true" />
+            )}
+            <button
+              aria-label="Copy assistant response"
+              className="grid h-8 w-8 shrink-0 place-items-center rounded text-[#4e5966] transition hover:bg-surface-container-low disabled:opacity-60"
+              onClick={() => void handleCopy()}
+              title={copied ? "Copied" : "Copy response"}
+              type="button"
+            >
+              {copied ? (
+                <CheckCircle2 className="h-4 w-4 text-primary" />
+              ) : (
+                <Copy className="h-4 w-4" />
+              )}
+            </button>
+          </div>
+          <MarkdownContent content={message.content} />
         </article>
 
         {message.sources?.length ? (
@@ -1490,6 +1688,155 @@ function AssistantMessage({
   );
 }
 
+function MarkdownContent({ content }: { content: string }) {
+  const normalized = content.replace(/\r\n/g, "\n");
+  const lines = normalized.split("\n");
+  const blocks: React.ReactNode[] = [];
+  let paragraph: string[] = [];
+  let listType: "ordered" | "unordered" | null = null;
+  let listItems: string[] = [];
+
+  const flushParagraph = () => {
+    if (paragraph.length === 0) {
+      return;
+    }
+
+    blocks.push(
+      <p className="whitespace-pre-wrap" key={`p-${blocks.length}`}>
+        {renderInlineLines(paragraph, `p-${blocks.length}`)}
+      </p>,
+    );
+    paragraph = [];
+  };
+
+  const flushList = () => {
+    if (!listType || listItems.length === 0) {
+      return;
+    }
+
+    const Tag = listType === "ordered" ? "ol" : "ul";
+    blocks.push(
+      <Tag
+        className={`ml-5 space-y-2 ${
+          listType === "ordered" ? "list-decimal" : "list-disc"
+        }`}
+        key={`list-${blocks.length}`}
+      >
+        {listItems.map((item, index) => (
+          <li key={`${index}-${item}`}>
+            {renderInlineMarkdown(item, `li-${blocks.length}-${index}`)}
+          </li>
+        ))}
+      </Tag>,
+    );
+    listType = null;
+    listItems = [];
+  };
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+
+    if (line.match(/^```/)) {
+      flushParagraph();
+      flushList();
+
+      const codeLines: string[] = [];
+      index += 1;
+      while (index < lines.length && !lines[index].match(/^```/)) {
+        codeLines.push(lines[index]);
+        index += 1;
+      }
+
+      blocks.push(
+        <pre
+          className="overflow-x-auto rounded border border-outline-variant bg-surface-container-lowest p-3 text-[14px] leading-6 text-[#151a18]"
+          key={`code-${blocks.length}`}
+        >
+          <code>{codeLines.join("\n")}</code>
+        </pre>,
+      );
+      continue;
+    }
+
+    if (line.trim() === "") {
+      flushParagraph();
+      flushList();
+      continue;
+    }
+
+    const unorderedMatch = line.match(/^\s*[-*]\s+(.+)$/);
+    const orderedMatch = line.match(/^\s*\d+[.)]\s+(.+)$/);
+    if (unorderedMatch || orderedMatch) {
+      flushParagraph();
+      const nextType = orderedMatch ? "ordered" : "unordered";
+      if (listType && listType !== nextType) {
+        flushList();
+      }
+      listType = nextType;
+      listItems.push((orderedMatch ?? unorderedMatch)?.[1] ?? "");
+      continue;
+    }
+
+    if (listType && /^\s{2,}\S/.test(line) && listItems.length > 0) {
+      listItems[listItems.length - 1] += ` ${line.trim()}`;
+      continue;
+    }
+
+    flushList();
+    paragraph.push(line);
+  }
+
+  flushParagraph();
+  flushList();
+
+  return <div className="space-y-4">{blocks}</div>;
+}
+
+function renderInlineLines(lines: string[], keyPrefix: string) {
+  return lines.flatMap((line, index) => [
+    index > 0 ? <br key={`${keyPrefix}-br-${index}`} /> : null,
+    ...renderInlineMarkdown(line, `${keyPrefix}-${index}`),
+  ]);
+}
+
+function renderInlineMarkdown(text: string, keyPrefix: string) {
+  const parts = text.split(
+    /(`[^`]+`|\*\*[^*]+\*\*|__[^_]+__|\*[^*]+\*|_[^_]+_)/g,
+  );
+
+  return parts.map((part, index) => {
+    const key = `${keyPrefix}-${index}`;
+    if (part.startsWith("`") && part.endsWith("`") && part.length > 1) {
+      return (
+        <code
+          className="rounded bg-surface-container-low px-1.5 py-0.5 text-[0.9em]"
+          key={key}
+        >
+          {part.slice(1, -1)}
+        </code>
+      );
+    }
+
+    if (
+      ((part.startsWith("**") && part.endsWith("**")) ||
+        (part.startsWith("__") && part.endsWith("__"))) &&
+      part.length > 4
+    ) {
+      return <strong key={key}>{part.slice(2, -2)}</strong>;
+    }
+
+    if (
+      ((part.startsWith("*") && part.endsWith("*")) ||
+        (part.startsWith("_") && part.endsWith("_"))) &&
+      part.length > 2
+    ) {
+      return <em key={key}>{part.slice(1, -1)}</em>;
+    }
+
+    return part;
+  });
+}
+
 function SourceChip({
   label,
   onClick,
@@ -1508,7 +1855,8 @@ function SourceChip({
       <FileText className="h-4 w-4 shrink-0" strokeWidth={2} />
       <span className="truncate">{label}</span>
       <span className="shrink-0 text-[12px] opacity-75">
-        {pageRange(source)} · {source.score.toFixed(3)}
+        {pageRange(source)} · {evidenceRoleLabel(source)} ·{" "}
+        {source.score.toFixed(3)}
       </span>
     </button>
   );
@@ -1649,6 +1997,16 @@ function SourceDrawer({
             <div className="grid grid-cols-2 gap-3 text-[13px] leading-5">
               <DrawerMetric label="File" value={source.source} />
               <DrawerMetric label="Pages" value={pageRange(source)} />
+              {source.section_heading ? (
+                <DrawerMetric
+                  label="Section"
+                  value={source.section_heading}
+                />
+              ) : null}
+              <DrawerMetric
+                label="Evidence"
+                value={evidenceRoleLabel(source)}
+              />
               <DrawerMetric label="Chunk" value={source.chunk_index} />
               <DrawerMetric
                 label="Relevance Score"

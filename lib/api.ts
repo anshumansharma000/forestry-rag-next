@@ -43,14 +43,25 @@ export type ConfigValidation = {
   status: ConfigStatus;
 };
 
+export type EvidenceRole = "matched" | "neighbor";
+
 export type Source = {
   source: string;
   display_source: string;
   page_start: number | null;
   page_end: number | null;
   chunk_index: number;
+  section_heading: string | null;
   score: number;
+  evidence_role: EvidenceRole;
   text: string;
+};
+
+export type AskResponse = {
+  answer: string;
+  sources: Source[];
+  confidence: number;
+  abstained: boolean;
 };
 
 export type ChatMessage = {
@@ -353,20 +364,28 @@ export function getMessages(token: string, sessionId: string) {
   );
 }
 
+export function ask(token: string, question: string, topK?: number) {
+  return apiRequest<AskResponse>("/ask", {
+    method: "POST",
+    token,
+    body: JSON.stringify({ question, top_k: topK }),
+  });
+}
+
 export function askSession(
   token: string,
   sessionId: string,
   message: string,
   topK?: number,
 ) {
-  return apiRequest<{
-    session_id: string;
-    user_message: ChatMessage;
-    assistant_message: ChatMessage;
-    search_query: string;
-    answer: string;
-    sources: Source[];
-  }>(`/chat/sessions/${encodeURIComponent(sessionId)}/ask`, {
+  return apiRequest<
+    AskResponse & {
+      session_id: string;
+      user_message: ChatMessage;
+      assistant_message: ChatMessage;
+      search_query: string;
+    }
+  >(`/chat/sessions/${encodeURIComponent(sessionId)}/ask`, {
     method: "POST",
     token,
     body: JSON.stringify({ message, top_k: topK }),

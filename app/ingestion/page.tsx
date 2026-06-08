@@ -3,8 +3,12 @@
 import {
   AlertCircle,
   ArrowLeft,
+  ChevronLeft,
+  ChevronRight,
   CheckCircle2,
   Database,
+  Eye,
+  EyeOff,
   FileText,
   Loader2,
   RefreshCw,
@@ -23,6 +27,7 @@ import {
   ApiError,
   AuthState,
   AuthUser,
+  ChunkPreviewParams,
   ChunkPreview,
   DocumentUpload,
   IngestJob,
@@ -35,6 +40,10 @@ import {
   uploadDocuments,
 } from "../../lib/api";
 
+const PREVIEW_LIMIT = 50;
+const DEFAULT_MAX_CONTENT_CHARS = 1000;
+const MAX_CONTENT_CHARS = 5000;
+
 function canManageDocuments(user: AuthUser | null) {
   return user?.role === "admin" || user?.role === "knowledge_manager";
 }
@@ -43,10 +52,32 @@ function pageRange(source: PreviewChunk) {
   if (source.page_start == null && source.page_end == null) {
     return "No page";
   }
+  if (source.page_start == null) {
+    return `Page ${source.page_end}`;
+  }
   if (source.page_start === source.page_end || source.page_end == null) {
     return `Page ${source.page_start}`;
   }
   return `Pages ${source.page_start}-${source.page_end}`;
+}
+
+function previewRange(preview: ChunkPreview | null) {
+  if (!preview || preview.chunks_returned === 0) {
+    return "No chunks returned";
+  }
+
+  const start = preview.offset + 1;
+  const end = preview.offset + preview.chunks_returned;
+  return `Showing ${start}-${end}`;
+}
+
+function normalizeSource(source: string) {
+  const value = source.trim();
+  return value || undefined;
+}
+
+function boundedContentChars(value: number) {
+  return Math.min(Math.max(value, 1), MAX_CONTENT_CHARS);
 }
 
 function formatIngestSummary(job: IngestJob) {
@@ -87,6 +118,10 @@ type UploadRow = {
 type UploadQueueItem = UploadRow & {
   file: File;
 };
+
+type PreviewParamsResult =
+  | { ok: true; params: ChunkPreviewParams }
+  | { ok: false; error: string };
 
 function fileKey(file: File, index: number) {
   return `${file.name}-${file.size}-${file.lastModified}-${index}`;
@@ -153,6 +188,13 @@ export default function IngestionPage() {
   const [uploading, setUploading] = useState(false);
   const [ingesting, setIngesting] = useState(false);
   const [previewing, setPreviewing] = useState(false);
+  const [previewOffset, setPreviewOffset] = useState(0);
+  const [sourceFilter, setSourceFilter] = useState("");
+  const [allSources, setAllSources] = useState(false);
+  const [showContent, setShowContent] = useState(false);
+  const [maxContentChars, setMaxContentChars] = useState(
+    DEFAULT_MAX_CONTENT_CHARS,
+  );
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const [uploadRows, setUploadRows] = useState<UploadRow[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -164,13 +206,67 @@ export default function IngestionPage() {
     return nextAuth.access_token;
   }
 
-  async function loadPreview(tokenOverride?: string) {
+  function previewParams(
+    overrides: Partial<ChunkPreviewParams> = {},
+  ): PreviewParamsResult {
+    const includeContent = overrides.include_content ?? showContent;
+    const source = normalizeSource(overrides.source ?? sourceFilter);
+    const includeAllSources = overrides.all_sources ?? allSources;
+
+    if (source && includeAllSources) {
+      return {
+        ok: false,
+        error: "Choose a source filename or All documents, not both.",
+      };
+    }
+
+    if (!source && !includeAllSources) {
+      return {
+        ok: false,
+        error: "Select or upload a document before loading chunk preview.",
+      };
+    }
+
+    return {
+      ok: true,
+      params: {
+        limit: Math.min(overrides.limit ?? PREVIEW_LIMIT, 200),
+        offset: Math.max(overrides.offset ?? previewOffset, 0),
+        source,
+        all_sources: includeAllSources,
+        include_content: includeContent,
+        max_content_chars: includeContent
+          ? boundedContentChars(overrides.max_content_chars ?? maxContentChars)
+          : undefined,
+      },
+    };
+  }
+
+  async function loadPreview(
+    tokenOverride?: string,
+    overrides: Partial<ChunkPreviewParams> = {},
+  ) {
+    setError(null);
+    const nextParams = previewParams(overrides);
+    if (!nextParams.ok) {
+      setError(nextParams.error);
+      return;
+    }
+
     setPreviewing(true);
     try {
       const token = tokenOverride ?? (await getToken());
-      setPreview(await getChunkPreview(token));
+      const nextPreview = await getChunkPreview(token, nextParams.params);
+      setPreview(nextPreview);
+      setPreviewOffset(nextPreview.offset);
     } catch (err) {
-      setError(formatApiError(err, "Unable to load chunk preview."));
+      const message =
+        err instanceof ApiError ? err.message.toLowerCase() : "";
+      if (message.includes("source") && message.includes("required")) {
+        setError("Select or upload a document before loading chunk preview.");
+      } else {
+        setError(formatApiError(err, "Unable to load chunk preview."));
+      }
     } finally {
       setPreviewing(false);
     }
@@ -195,10 +291,6 @@ export default function IngestionPage() {
 
         setAuth(session);
         setUser(session.user);
-
-        if (canManageDocuments(session.user)) {
-          await loadPreview(session.access_token);
-        }
       } catch (err) {
         if (!cancelled) {
           setError(formatApiError(err, "Unable to load ingestion page."));
@@ -354,14 +446,23 @@ export default function IngestionPage() {
       }
 
       const filenames = uploadedFilenames.join(", ");
+      const previewFilename = uploadedFilenames[0];
       setNotice(
         `Upload complete: ${filenames}. Run ingest to index these documents before they are searchable.`,
       );
+      setSourceFilter(previewFilename);
+      setAllSources(false);
+      setShowContent(false);
       setSelectedFiles([]);
       if (fileInputRef.current) {
         fileInputRef.current.value = "";
       }
-      await loadPreview(token);
+      await loadPreview(token, {
+        source: previewFilename,
+        all_sources: false,
+        offset: 0,
+        include_content: false,
+      });
     } catch (err) {
       setError(formatApiError(err, "Unable to upload document."));
     } finally {
@@ -389,7 +490,9 @@ export default function IngestionPage() {
         setIngestJob(current);
       }
 
-      await loadPreview(token);
+      if (normalizeSource(sourceFilter) || allSources) {
+        await loadPreview(token, { offset: 0 });
+      }
     } catch (err) {
       setError(formatApiError(err, "Unable to ingest new documents."));
     } finally {
@@ -397,7 +500,66 @@ export default function IngestionPage() {
     }
   }
 
+  function handleSourceChange(value: string) {
+    setSourceFilter(value);
+    setAllSources(false);
+    setShowContent(false);
+    setPreviewOffset(0);
+    setPreview(null);
+  }
+
+  function handleAllSourcesChange(value: boolean) {
+    setAllSources(value);
+    setShowContent(false);
+    setPreviewOffset(0);
+    setPreview(null);
+    if (value) {
+      setSourceFilter("");
+    }
+  }
+
+  async function applyPreviewControls(event?: React.FormEvent<HTMLFormElement>) {
+    event?.preventDefault();
+    await loadPreview(undefined, {
+      offset: 0,
+      source: normalizeSource(sourceFilter),
+      all_sources: allSources,
+      include_content: showContent,
+      max_content_chars: showContent ? maxContentChars : undefined,
+    });
+  }
+
+  async function toggleContent(nextShowContent: boolean) {
+    setShowContent(nextShowContent);
+    await loadPreview(undefined, {
+      offset: preview?.offset ?? previewOffset,
+      source: normalizeSource(sourceFilter),
+      all_sources: allSources,
+      include_content: nextShowContent,
+      max_content_chars: nextShowContent ? maxContentChars : undefined,
+    });
+  }
+
+  async function goToPreviewPage(nextOffset: number) {
+    await loadPreview(undefined, {
+      offset: Math.max(nextOffset, 0),
+      source: normalizeSource(sourceFilter),
+      all_sources: allSources,
+      include_content: showContent,
+      max_content_chars: showContent ? maxContentChars : undefined,
+    });
+  }
+
   const canManage = canManageDocuments(user);
+  const hasPreviewScope = Boolean(normalizeSource(sourceFilter) || allSources);
+  const scopeDirty =
+    allSources !== (preview?.all_sources ?? false) ||
+    (!allSources &&
+      normalizeSource(sourceFilter) !== (preview?.source ?? undefined));
+  const canGoBack = Boolean(
+    preview && !scopeDirty && preview.offset > 0 && !previewing,
+  );
+  const canGoForward = Boolean(preview?.has_more && !scopeDirty && !previewing);
 
   return (
     <main className="min-h-screen bg-surface px-5 py-6 text-on-surface sm:px-8">
@@ -544,7 +706,18 @@ export default function IngestionPage() {
 
               <div className="mt-5 grid gap-3 text-[13px] leading-5 text-[#4e5966] sm:grid-cols-2">
                 <Metric label="Documents" value={preview?.documents ?? "n/a"} />
-                <Metric label="Chunks" value={preview?.chunks.length ?? "n/a"} />
+                <Metric
+                  label="Processed"
+                  value={preview?.documents_processed ?? "n/a"}
+                />
+                <Metric
+                  label="Chunks seen"
+                  value={preview?.chunks_seen ?? "n/a"}
+                />
+                <Metric
+                  label="Page rows"
+                  value={preview?.chunks_returned ?? "n/a"}
+                />
               </div>
 
               {ingestJob ? (
@@ -569,6 +742,139 @@ export default function IngestionPage() {
                 </div>
               </div>
 
+              <form
+                className="mt-5 grid gap-3 rounded border border-outline-variant bg-surface-container-lowest p-3"
+                onSubmit={(event) => void applyPreviewControls(event)}
+              >
+                <label className="grid gap-1 text-[13px] font-semibold text-[#26384d]">
+                  Source filename
+                  <input
+                    className="h-10 rounded border border-outline-variant bg-white px-3 text-[14px] font-normal text-[#151a18] outline-none transition focus:border-primary"
+                    disabled={allSources}
+                    onChange={(event) => handleSourceChange(event.target.value)}
+                    placeholder="Exact filename"
+                    type="text"
+                    value={sourceFilter}
+                  />
+                </label>
+
+                <label className="inline-flex min-h-10 items-center gap-2 text-[14px] font-semibold text-[#26384d]">
+                  <input
+                    checked={allSources}
+                    className="h-4 w-4 accent-primary"
+                    disabled={previewing}
+                    onChange={(event) =>
+                      handleAllSourcesChange(event.target.checked)
+                    }
+                    type="checkbox"
+                  />
+                  All documents
+                </label>
+
+                {allSources ? (
+                  <div className="flex items-start gap-2 rounded border border-[#f0d8a8] bg-[#fff8e8] px-3 py-2 text-[13px] leading-5 text-[#6b4b13]">
+                    <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+                    <span>Corpus-wide preview can be slower.</span>
+                  </div>
+                ) : null}
+
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+                  <label className="inline-flex min-h-10 items-center gap-2 text-[14px] font-semibold text-[#26384d]">
+                    <input
+                      checked={showContent}
+                      className="h-4 w-4 accent-primary"
+                      disabled={!hasPreviewScope || previewing}
+                      onChange={(event) =>
+                        void toggleContent(event.target.checked)
+                      }
+                      type="checkbox"
+                    />
+                    {showContent ? (
+                      <Eye className="h-4 w-4 text-primary" />
+                    ) : (
+                      <EyeOff className="h-4 w-4 text-[#626b79]" />
+                    )}
+                    Show content
+                  </label>
+
+                  {showContent ? (
+                    <label className="grid gap-1 text-[13px] font-semibold text-[#26384d] sm:w-44">
+                      Max chars
+                      <input
+                        className="h-10 rounded border border-outline-variant bg-white px-3 text-[14px] font-normal text-[#151a18] outline-none transition focus:border-primary"
+                        max={MAX_CONTENT_CHARS}
+                        min={1}
+                        onChange={(event) =>
+                          setMaxContentChars(
+                            boundedContentChars(Number(event.target.value) || 1),
+                          )
+                        }
+                        type="number"
+                        value={maxContentChars}
+                      />
+                    </label>
+                  ) : null}
+
+                  <button
+                    className="inline-flex h-10 items-center justify-center gap-2 rounded bg-primary px-4 text-[14px] font-semibold text-white transition hover:bg-primary-container disabled:cursor-not-allowed disabled:opacity-60"
+                    disabled={previewing}
+                    type="submit"
+                  >
+                    {previewing ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <RefreshCw className="h-4 w-4" />
+                    )}
+                    Apply
+                  </button>
+                </div>
+              </form>
+
+              <div className="mt-4 flex flex-col gap-3 border-b border-outline-variant pb-4 sm:flex-row sm:items-center sm:justify-between">
+                <div className="text-[13px] leading-5 text-[#4e5966]">
+                  <p className="font-semibold text-[#26384d]">
+                    {previewRange(preview)}
+                  </p>
+                  <p>
+                    Offset {preview?.offset ?? previewOffset} · Limit{" "}
+                    {preview?.limit ?? PREVIEW_LIMIT} ·{" "}
+                    {preview?.all_sources
+                      ? "All documents"
+                      : preview?.source || "No document selected"}
+                  </p>
+                </div>
+                <div className="inline-flex items-center gap-2">
+                  <button
+                    className="inline-flex h-9 items-center justify-center gap-1 rounded border border-outline-variant bg-white px-3 text-[13px] font-semibold text-[#26384d] transition hover:bg-surface-container-low disabled:cursor-not-allowed disabled:opacity-50"
+                    disabled={!canGoBack}
+                    onClick={() =>
+                      void goToPreviewPage(
+                        (preview?.offset ?? previewOffset) -
+                          (preview?.limit ?? PREVIEW_LIMIT),
+                      )
+                    }
+                    type="button"
+                  >
+                    <ChevronLeft className="h-4 w-4" />
+                    Previous
+                  </button>
+                  <button
+                    className="inline-flex h-9 items-center justify-center gap-1 rounded border border-outline-variant bg-white px-3 text-[13px] font-semibold text-[#26384d] transition hover:bg-surface-container-low disabled:cursor-not-allowed disabled:opacity-50"
+                    disabled={!canGoForward}
+                    onClick={() =>
+                      void goToPreviewPage(
+                        (preview?.offset ?? previewOffset) +
+                          (preview?.limit ?? PREVIEW_LIMIT),
+                      )
+                    }
+                    type="button"
+                  >
+                    Next
+                    <ChevronRight className="h-4 w-4" />
+                  </button>
+                </div>
+              </div>
+
               <div className="mt-5 max-h-[560px] space-y-3 overflow-y-auto pr-1">
                 {previewing ? (
                   <div className="flex items-center gap-3 rounded border border-outline-variant bg-surface-container-lowest p-4 text-[#626b79]">
@@ -583,7 +889,7 @@ export default function IngestionPage() {
                     No chunks available yet. Upload documents and run ingest.
                   </p>
                 ) : null}
-                {preview?.chunks.slice(0, 20).map((chunk) => (
+                {preview?.chunks.map((chunk) => (
                   <article
                     className="rounded border border-outline-variant/70 bg-surface-container-lowest p-4"
                     key={`${chunk.source}-${chunk.chunk_index}`}
@@ -595,13 +901,51 @@ export default function IngestionPage() {
                           {chunk.source}
                         </p>
                         <p className="mt-1 text-[12px] font-semibold uppercase text-[#7b8492]">
-                          {pageRange(chunk)} · Chunk {chunk.chunk_index}
+                          {pageRange(chunk)} · Chunk {chunk.chunk_index} ·{" "}
+                          {chunk.chunk_type}
                         </p>
                       </div>
                     </div>
-                    <p className="mt-3 line-clamp-4 text-[14px] leading-6 text-[#323b45]">
-                      {chunk.content || "No excerpt available."}
-                    </p>
+                    <dl className="mt-3 grid gap-2 text-[13px] leading-5 text-[#4e5966] sm:grid-cols-2">
+                      <div>
+                        <dt className="font-semibold text-[#26384d]">Section</dt>
+                        <dd className="truncate">
+                          {chunk.section_heading || "No section"}
+                        </dd>
+                      </div>
+                      <div>
+                        <dt className="font-semibold text-[#26384d]">Tokens</dt>
+                        <dd>{chunk.token_estimate}</dd>
+                      </div>
+                      <div>
+                        <dt className="font-semibold text-[#26384d]">
+                          Content chars
+                        </dt>
+                        <dd>{chunk.content_chars}</dd>
+                      </div>
+                      <div>
+                        <dt className="font-semibold text-[#26384d]">Pages</dt>
+                        <dd>{pageRange(chunk)}</dd>
+                      </div>
+                    </dl>
+                    {chunk.content_omitted ? (
+                      <div className="mt-3 inline-flex items-center gap-2 rounded border border-dashed border-outline-variant bg-white px-3 py-2 text-[13px] font-semibold text-[#626b79]">
+                        <EyeOff className="h-4 w-4" />
+                        Content hidden
+                      </div>
+                    ) : (
+                      <div className="mt-3 rounded border border-outline-variant bg-white px-3 py-2">
+                        <p className="whitespace-pre-wrap text-[14px] leading-6 text-[#323b45]">
+                          {chunk.content || "No content returned."}
+                        </p>
+                        {chunk.content_truncated ? (
+                          <p className="mt-2 inline-flex rounded bg-[#fff5f1] px-2 py-1 text-[12px] font-semibold text-[#743f2c]">
+                            Content truncated at{" "}
+                            {preview?.max_content_chars ?? maxContentChars} chars
+                          </p>
+                        ) : null}
+                      </div>
+                    )}
                   </article>
                 ))}
               </div>

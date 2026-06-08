@@ -115,8 +115,11 @@ export type PreviewChunk = {
   section_heading: string | null;
   page_start: number | null;
   page_end: number | null;
-  content: string;
+  content: string | null;
   token_estimate: number;
+  content_chars: number;
+  content_omitted?: boolean;
+  content_truncated?: boolean;
   metadata: {
     kind: string;
     title: string;
@@ -124,10 +127,31 @@ export type PreviewChunk = {
   };
 };
 
-export type ChunkPreview = {
+export type ChunkPreviewResponse = {
   documents: number;
+  documents_processed: number;
   chunks: PreviewChunk[];
+  chunks_returned: number;
+  chunks_seen: number;
+  offset: number;
+  limit: number;
+  has_more: boolean;
+  source: string | null;
+  all_sources: boolean;
+  include_content: boolean;
+  max_content_chars: number;
 };
+
+export type ChunkPreviewParams = {
+  limit: number;
+  offset: number;
+  source?: string;
+  all_sources?: boolean;
+  include_content: boolean;
+  max_content_chars?: number;
+};
+
+export type ChunkPreview = ChunkPreviewResponse;
 
 export type AdminUser = AuthUser & {
   is_active: boolean;
@@ -477,8 +501,38 @@ export function getIngestJob(token: string, jobId: string) {
   );
 }
 
-export function getChunkPreview(token: string) {
-  return apiRequest<ChunkPreview>("/chunks/preview", { token });
+export function getChunkPreview(token: string, params: ChunkPreviewParams) {
+  const source = params.source?.trim();
+  const allSources = params.all_sources === true;
+  if (source && allSources) {
+    throw new Error("Choose a source filename or All documents, not both.");
+  }
+  if (!source && !allSources) {
+    throw new Error("Select or upload a document before loading chunk preview.");
+  }
+
+  const query = new URLSearchParams();
+  if (source) {
+    query.set("source", source);
+  } else {
+    query.set("all_sources", "true");
+  }
+  query.set("limit", String(Math.min(Math.max(params.limit, 1), 200)));
+  query.set("offset", String(Math.max(params.offset, 0)));
+  query.set("include_content", String(params.include_content));
+  if (params.include_content && params.max_content_chars != null) {
+    query.set(
+      "max_content_chars",
+      String(Math.min(Math.max(params.max_content_chars, 1), 5000)),
+    );
+  }
+
+  return apiRequest<ChunkPreviewResponse>(
+    `/chunks/preview?${query.toString()}`,
+    {
+      token,
+    },
+  );
 }
 
 export function listUsers(token: string, limit = 100) {

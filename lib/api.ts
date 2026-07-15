@@ -228,7 +228,8 @@ export class ApiError extends Error {
   }
 }
 
-const authStorageKey = "forest-rag-auth";
+const authStorageKey = "aranyabodh-auth";
+const legacyAuthStorageKey = "forest-rag-auth";
 
 export function readStoredAuth(): AuthState | null {
   if (typeof window === "undefined") {
@@ -236,7 +237,13 @@ export function readStoredAuth(): AuthState | null {
   }
 
   try {
-    const raw = window.localStorage.getItem(authStorageKey);
+    const raw =
+      window.localStorage.getItem(authStorageKey) ??
+      window.localStorage.getItem(legacyAuthStorageKey);
+    if (raw && !window.localStorage.getItem(authStorageKey)) {
+      window.localStorage.setItem(authStorageKey, raw);
+      window.localStorage.removeItem(legacyAuthStorageKey);
+    }
     return raw ? (JSON.parse(raw) as AuthState) : null;
   } catch {
     return null;
@@ -245,10 +252,12 @@ export function readStoredAuth(): AuthState | null {
 
 export function storeAuth(auth: AuthState) {
   window.localStorage.setItem(authStorageKey, JSON.stringify(auth));
+  window.localStorage.removeItem(legacyAuthStorageKey);
 }
 
 export function clearStoredAuth() {
   window.localStorage.removeItem(authStorageKey);
+  window.localStorage.removeItem(legacyAuthStorageKey);
 }
 
 async function readError(response: Response) {

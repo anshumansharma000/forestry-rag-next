@@ -364,7 +364,7 @@ function LoginPage({
             <ShieldCheck className="h-9 w-9" />
           </div>
           <h1 className="mt-8 text-[42px] font-bold leading-[1.12]">
-            Forestry Intelligence System
+            Aranyabodh
           </h1>
           <p className="mt-5 max-w-xl text-[18px] leading-7 text-white/78">
             Query indexed department documents, preserve cited source context,
@@ -954,7 +954,7 @@ function Sidebar({
       <div className="flex items-start justify-between px-7 pb-7 pt-8">
         <div>
           <h1 className="text-[26px] font-bold leading-8 text-primary">
-            Forest RAG
+            Aranyabodh
           </h1>
           <p className="mt-2 text-[14px] font-medium uppercase leading-4 text-[#626b79]">
             RAG Analysis Engine
@@ -1105,7 +1105,7 @@ function Header({
           <Menu className="h-5 w-5" strokeWidth={2.2} />
         </button>
         <h2 className="truncate text-[21px] font-bold leading-8 text-primary sm:text-[24px]">
-          Forestry Intelligence System
+          Aranyabodh
         </h2>
       </div>
       <div className="flex items-center gap-3 text-[#626b79] sm:gap-4">
@@ -1481,7 +1481,7 @@ function AssistantIntro({ user }: { user: AuthUser }) {
         <ShieldCheck className="h-10 w-10" strokeWidth={2.2} />
       </div>
       <h3 className="mt-6 text-[22px] font-medium leading-8 text-[#151a18]">
-        Forestry Intelligence System
+        Aranyabodh
       </h3>
       <p className="mt-3 text-[17px] leading-6 text-[#2d3331]">
         Ask questions over indexed PDF, DOCX, and TXT department sources.
@@ -1952,7 +1952,7 @@ function ChatInput({
           </button>
         </form>
         <p className="mt-4 text-center text-[12px] font-medium uppercase leading-4 text-[#97a1af]">
-          Forestry Intelligence
+          Aranyabodh
         </p>
       </div>
     </div>

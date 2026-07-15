@@ -9,8 +9,8 @@ const publicSans = Public_Sans({
 });
 
 export const metadata: Metadata = {
-  title: "Forestry Intelligence System",
-  description: "Internal forestry department RAG assistant chat interface.",
+  title: "Aranyabodh",
+  description: "Aranyabodh forestry RAG assistant chat interface.",
 };
 
 export default function RootLayout({

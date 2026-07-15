@@ -54,15 +54,27 @@ export class IngestJobPoller {
 }
 
 export function activeJobsStorageKey(userId: string) {
+  return `aranyabodh-active-ingest-jobs:${userId}`;
+}
+
+function legacyActiveJobsStorageKey(userId: string) {
   return `forest-rag-active-ingest-jobs:${userId}`;
 }
 
 export function readActiveJobs(userId: string): ActiveIngestJob[] {
   if (typeof window === "undefined") return [];
   try {
-    const value = JSON.parse(
-      window.localStorage.getItem(activeJobsStorageKey(userId)) ?? "[]",
-    );
+    const storageKey = activeJobsStorageKey(userId);
+    const legacyStorageKey = legacyActiveJobsStorageKey(userId);
+    const raw =
+      window.localStorage.getItem(storageKey) ??
+      window.localStorage.getItem(legacyStorageKey) ??
+      "[]";
+    if (raw !== "[]" && !window.localStorage.getItem(storageKey)) {
+      window.localStorage.setItem(storageKey, raw);
+      window.localStorage.removeItem(legacyStorageKey);
+    }
+    const value = JSON.parse(raw);
     return Array.isArray(value)
       ? value.filter(
           (item): item is ActiveIngestJob =>
@@ -77,4 +89,5 @@ export function readActiveJobs(userId: string): ActiveIngestJob[] {
 
 export function writeActiveJobs(userId: string, jobs: ActiveIngestJob[]) {
   window.localStorage.setItem(activeJobsStorageKey(userId), JSON.stringify(jobs));
+  window.localStorage.removeItem(legacyActiveJobsStorageKey(userId));
 }

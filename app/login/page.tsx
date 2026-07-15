@@ -42,7 +42,7 @@ export default function LoginRoute() {
             <ShieldCheck className="h-9 w-9" />
           </div>
           <h1 className="mt-8 text-[42px] font-bold leading-[1.12]">
-            Forestry Intelligence System
+            Aranyabodh
           </h1>
           <p className="mt-5 max-w-xl text-[18px] leading-7 text-white/78">
             Secure access for the forest department RAG pilot.

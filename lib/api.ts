@@ -91,6 +91,7 @@ export type IngestJobResult = {
   documents_skipped: number;
   chunks: number;
   chunks_added: number;
+  source: string | null;
   storage: string;
 };
 
@@ -103,7 +104,11 @@ export type IngestJob = {
   updated_at: string;
   started_at: string | null;
   finished_at: string | null;
-  metadata: Record<string, unknown>;
+  metadata: {
+    source?: string;
+    scope?: "document" | "corpus";
+    [key: string]: unknown;
+  };
   result: IngestJobResult | null;
   error: string | null;
 };
@@ -176,13 +181,24 @@ export type DocumentUploadPresignFile = {
   content_type: string;
 };
 
-export type DocumentUpload = {
+export type PresignedUpload = {
   upload_id: string;
   filename: string;
   upload_url: string;
-  method: string;
+  method: "PUT";
   headers: Record<string, string>;
+  expires_in_seconds: number;
+  max_bytes: number;
 };
+
+export type CompletedUpload = {
+  status: "ok";
+  filename: string;
+  path: string;
+};
+
+/** @deprecated Use PresignedUpload. */
+export type DocumentUpload = PresignedUpload;
 
 type RequestOptions = RequestInit & {
   token?: string | null;
@@ -466,20 +482,23 @@ export function presignDocumentUploads(
   token: string,
   files: DocumentUploadPresignFile[],
 ) {
-  return apiRequest<{ uploads: DocumentUpload[] }>("/documents/uploads/presign", {
-    method: "POST",
-    token,
-    body: JSON.stringify({ files }),
-  });
+  return apiRequest<{ status: "ok"; uploads: PresignedUpload[] }>(
+    "/documents/uploads/presign",
+    {
+      method: "POST",
+      token,
+      body: JSON.stringify({ files }),
+    },
+  );
 }
 
 export function completeDocumentUploads(
   token: string,
-  uploads: Pick<DocumentUpload, "upload_id" | "filename">[],
+  uploads: Pick<PresignedUpload, "upload_id" | "filename">[],
 ) {
   return apiRequest<{
     status: "ok";
-    files: { status: "ok"; filename: string; path?: string }[];
+    files: CompletedUpload[];
   }>("/documents/uploads/complete", {
     method: "POST",
     token,
@@ -487,10 +506,11 @@ export function completeDocumentUploads(
   });
 }
 
-export function startIngest(token: string) {
+export function startIngest(token: string, source: string) {
   return apiRequest<{ job: IngestJob }>("/ingest", {
     method: "POST",
     token,
+    body: JSON.stringify({ source }),
   });
 }
 

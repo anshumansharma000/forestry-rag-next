@@ -6,7 +6,6 @@ import {
   ChevronLeft,
   ChevronRight,
   CheckCircle2,
-  Database,
   Eye,
   EyeOff,
   FileText,
@@ -29,16 +28,25 @@ import {
   AuthUser,
   ChunkPreviewParams,
   ChunkPreview,
-  DocumentUpload,
   IngestJob,
+  PresignedUpload,
   PreviewChunk,
   completeDocumentUploads,
   getChunkPreview,
   getIngestJob,
   presignDocumentUploads,
   startIngest,
-  uploadDocuments,
 } from "../../lib/api";
+import {
+  DocumentFlowStatus,
+  processDocumentUploads,
+  UploadFlowUpdate,
+} from "../../lib/document-upload-flow";
+import {
+  IngestJobPoller,
+  readActiveJobs,
+  writeActiveJobs,
+} from "../../lib/ingestion-polling";
 
 const PREVIEW_LIMIT = 50;
 const DEFAULT_MAX_CONTENT_CHARS = 1000;
@@ -80,43 +88,19 @@ function boundedContentChars(value: number) {
   return Math.min(Math.max(value, 1), MAX_CONTENT_CHARS);
 }
 
-function formatIngestSummary(job: IngestJob) {
-  if (job.status === "failed") {
-    return job.error || "Ingest failed.";
-  }
-
-  if (job.status === "queued" || job.status === "running") {
-    return `Ingest is ${job.status}.`;
-  }
-
-  if (!job.result) {
-    return "Ingest completed.";
-  }
-
-  if (job.result.documents_added === 0) {
-    return "No new documents found. Existing indexed documents were left unchanged.";
-  }
-
-  return `Indexed ${job.result.documents_added} new document(s), skipped ${job.result.documents_skipped} already indexed document(s), added ${job.result.chunks_added} chunk(s).`;
-}
-
-type UploadStatus =
-  | "queued"
-  | "presigning"
-  | "uploading"
-  | "completing"
-  | "done"
-  | "failed";
+type UploadStatus = DocumentFlowStatus | "processing" | "indexed";
 
 type UploadRow = {
   key: string;
   filename: string;
+  size: number | null;
   status: UploadStatus;
+  progress: number;
   detail?: string;
-};
-
-type UploadQueueItem = UploadRow & {
-  file: File;
+  completedFilename?: string;
+  jobId?: string;
+  chunks?: number;
+  failureStage?: "upload" | "completion" | "ingestion";
 };
 
 type PreviewParamsResult =
@@ -129,64 +113,85 @@ function fileKey(file: File, index: number) {
 
 function uploadStatusLabel(status: UploadStatus) {
   switch (status) {
-    case "queued":
-      return "Queued";
-    case "presigning":
+    case "selected":
+      return "Selected";
+    case "requesting_upload":
       return "Preparing";
     case "uploading":
       return "Uploading";
-    case "completing":
-      return "Completing";
-    case "done":
-      return "Done";
+    case "finalizing":
+      return "Finalizing";
+    case "queued":
+      return "Queued";
+    case "processing":
+      return "Processing";
+    case "indexed":
+      return "Indexed";
     case "failed":
       return "Failed";
   }
 }
 
-function isNonR2StorageConfigError(err: unknown) {
-  if (!(err instanceof ApiError)) {
-    return false;
-  }
+function formatFileSize(bytes: number | null) {
+  if (bytes == null) return "Size unavailable";
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
 
-  const message = err.message.toLowerCase();
-  const code = err.code.toLowerCase();
-  const referencesBackend = message.includes("document_storage_backend");
-  const referencesR2Mismatch =
-    message.includes("not r2") || message.includes("must be r2");
+function isStoredDocumentMissing(message?: string) {
+  const normalized = message?.toLowerCase() ?? "";
   return (
-    referencesBackend &&
-    referencesR2Mismatch &&
-    (code.includes("config") || err.status === 400 || err.status === 422)
+    normalized.includes("not found") ||
+    normalized.includes("missing from storage") ||
+    normalized.includes("stored document was not found")
   );
 }
 
-async function putFileToStorage(upload: DocumentUpload, file: File) {
-  const response = await fetch(upload.upload_url, {
-    method: upload.method,
-    headers: upload.headers,
-    body: file,
-  });
-
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(
-      text ||
-        `Storage upload failed for ${file.name}: ${response.status} ${response.statusText}`,
+function putFileToStorage(
+  upload: PresignedUpload,
+  file: File,
+  onProgress: (percentage: number) => void,
+) {
+  return new Promise<void>((resolve, reject) => {
+    const request = new XMLHttpRequest();
+    request.open("PUT", upload.upload_url);
+    request.withCredentials = false;
+    Object.entries(upload.headers).forEach(([name, value]) =>
+      request.setRequestHeader(name, value),
     );
-  }
+    request.upload.onprogress = (event) => {
+      if (event.lengthComputable) {
+        onProgress(Math.min(100, Math.round((event.loaded / event.total) * 100)));
+      }
+    };
+    request.onerror = () => reject(new Error(`Storage upload failed for ${file.name}.`));
+    request.onabort = () => reject(new Error(`Storage upload was cancelled for ${file.name}.`));
+    request.onload = () => {
+      if (request.status >= 200 && request.status < 300) {
+        onProgress(100);
+        resolve();
+      } else {
+        reject(
+          new Error(
+            request.responseText ||
+              `Storage upload failed for ${file.name}: ${request.status}.`,
+          ),
+        );
+      }
+    };
+    request.send(file);
+  });
 }
 
 export default function IngestionPage() {
   const [auth, setAuth] = useState<AuthState | null>(null);
   const [user, setUser] = useState<AuthUser | null>(null);
   const [preview, setPreview] = useState<ChunkPreview | null>(null);
-  const [ingestJob, setIngestJob] = useState<IngestJob | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
-  const [ingesting, setIngesting] = useState(false);
   const [previewing, setPreviewing] = useState(false);
   const [previewOffset, setPreviewOffset] = useState(0);
   const [sourceFilter, setSourceFilter] = useState("");
@@ -198,9 +203,12 @@ export default function IngestionPage() {
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const [uploadRows, setUploadRows] = useState<UploadRow[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const authRef = useRef<AuthState | null>(null);
+  const pollerRef = useRef<IngestJobPoller | null>(null);
 
   async function getToken() {
-    const nextAuth = await ensureFreshAuth(auth);
+    const nextAuth = await ensureFreshAuth(authRef.current ?? auth);
+    authRef.current = nextAuth;
     setAuth(nextAuth);
     setUser(nextAuth.user);
     return nextAuth.access_token;
@@ -290,6 +298,7 @@ export default function IngestionPage() {
         }
 
         setAuth(session);
+        authRef.current = session;
         setUser(session.user);
       } catch (err) {
         if (!cancelled) {
@@ -309,6 +318,95 @@ export default function IngestionPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  useEffect(() => {
+    if (!user) return;
+
+    const poller = new IngestJobPoller(
+      async (jobId) => {
+        const token = await getToken();
+        return (await getIngestJob(token, jobId)).job;
+      },
+      (filename, job) => {
+        setUploadRows((rows) =>
+          rows.map((row) =>
+            row.jobId === job.id
+              ? {
+                  ...row,
+                  status:
+                    job.status === "running"
+                      ? "processing"
+                      : job.status === "succeeded"
+                        ? "indexed"
+                        : job.status,
+                  detail: job.status === "failed" ? job.error || "Ingestion failed." : undefined,
+                  chunks: job.status === "succeeded" ? job.result?.chunks_added ?? job.result?.chunks : undefined,
+                  failureStage: job.status === "failed" ? "ingestion" : undefined,
+                }
+              : row,
+          ),
+        );
+
+        if (job.status === "succeeded" || job.status === "failed") {
+          const remaining = readActiveJobs(user.id).filter(
+            (active) => active.jobId !== job.id,
+          );
+          writeActiveJobs(user.id, remaining);
+        }
+        if (job.status === "succeeded") {
+          setSourceFilter(filename);
+          setAllSources(false);
+        }
+      },
+      (filename, pollingError) => {
+        setUploadRows((rows) =>
+          rows.map((row) =>
+            row.completedFilename === filename &&
+            (row.status === "queued" || row.status === "processing")
+              ? {
+                  ...row,
+                  detail: formatApiError(
+                    pollingError,
+                    "Unable to refresh ingestion status.",
+                  ),
+                }
+              : row,
+          ),
+        );
+      },
+    );
+    pollerRef.current = poller;
+
+    const activeJobs = readActiveJobs(user.id);
+    if (activeJobs.length) {
+      setUploadRows((rows) => {
+        const knownIds = new Set(rows.map((row) => row.jobId));
+        return [
+          ...rows,
+          ...activeJobs
+            .filter(({ jobId }) => !knownIds.has(jobId))
+            .map(({ filename, jobId }) => ({
+              key: `resumed-${jobId}`,
+              filename,
+              completedFilename: filename,
+              jobId,
+              size: null,
+              progress: 100,
+              status: "queued" as const,
+              detail: "Resuming status checks",
+            })),
+        ];
+      });
+      activeJobs.forEach((active) => poller.start(active, true));
+    }
+
+    return () => {
+      poller.stopAll();
+      if (pollerRef.current === poller) pollerRef.current = null;
+    };
+    // Polling is deliberately scoped to the authenticated user.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.id]);
+
   function selectFiles(fileList: FileList | null) {
     const files = Array.from(fileList ?? []);
     setSelectedFiles(files);
@@ -316,97 +414,43 @@ export default function IngestionPage() {
       files.map((file, index) => ({
         key: fileKey(file, index),
         filename: file.name,
-        status: "queued",
+        size: file.size,
+        status: "selected",
+        progress: 0,
       })),
     );
     setNotice(null);
     setError(null);
   }
 
-  function updateUploadRows(
-    keys: string[],
-    status: UploadStatus,
-    detail?: string,
+  function updateUploadRow(
+    key: string,
+    update: Omit<UploadFlowUpdate, "status"> & {
+      status?: UploadStatus;
+      jobId?: string;
+    },
   ) {
     setUploadRows((rows) =>
-      rows.map((row) =>
-        keys.includes(row.key) ? { ...row, status, detail } : row,
-      ),
+      rows.map((row) => (row.key === key ? { ...row, ...update } : row)),
     );
   }
 
-  async function uploadWithMultipartFallback(token: string, files: File[]) {
-    const keys = files.map(fileKey);
-    updateUploadRows(keys, "uploading", "Using server upload");
-    const response = await uploadDocuments(token, files);
-    updateUploadRows(keys, "done", "Uploaded through server");
-    return response.files.map((file) => file.filename);
-  }
-
-  async function uploadWithDirectR2(token: string, files: File[]) {
-    const queueItems: UploadQueueItem[] = files.map((file, index) => ({
-      key: fileKey(file, index),
-      file,
-      filename: file.name,
-      status: "queued",
-    }));
-    const keys = queueItems.map((item) => item.key);
-
-    updateUploadRows(keys, "presigning");
-    const { uploads } = await presignDocumentUploads(
-      token,
-      files.map((file) => ({
-        filename: file.name,
-        size_bytes: file.size,
-        content_type: file.type || "application/octet-stream",
-      })),
-    );
-
-    const filesByName = new Map<string, UploadQueueItem[]>();
-    for (const item of queueItems) {
-      filesByName.set(item.filename, [
-        ...(filesByName.get(item.filename) ?? []),
-        item,
-      ]);
-    }
-
-    const uploadPairs = uploads.map((upload) => {
-      const matches = filesByName.get(upload.filename) ?? [];
-      const item = matches.shift();
-      filesByName.set(upload.filename, matches);
-      if (!item) {
-        throw new Error(`Unable to match presigned upload for ${upload.filename}.`);
-      }
-      return { item, upload };
+  function registerJob(key: string, filename: string, job: IngestJob) {
+    updateUploadRow(key, {
+      status: job.status === "running" ? "processing" : "queued",
+      completedFilename: filename,
+      job,
     });
-
-    await Promise.all(
-      uploadPairs.map(async ({ item, upload }) => {
-        updateUploadRows([item.key], "uploading");
-        try {
-          await putFileToStorage(upload, item.file);
-        } catch (err) {
-          updateUploadRows(
-            [item.key],
-            "failed",
-            formatApiError(err, "Unable to upload document."),
-          );
-          throw err;
-        }
-        updateUploadRows([item.key], "completing");
-      }),
+    setUploadRows((rows) =>
+      rows.map((row) => (row.key === key ? { ...row, jobId: job.id } : row)),
     );
-
-    await completeDocumentUploads(
-      token,
-      uploads.map((upload) => ({
-        upload_id: upload.upload_id,
-        filename: upload.filename,
-      })),
-    );
-
-    updateUploadRows(keys, "done");
-    return uploads.map((upload) => upload.filename);
+    if (user) {
+      const active = readActiveJobs(user.id).filter(
+        ({ jobId }) => jobId !== job.id,
+      );
+      writeActiveJobs(user.id, [...active, { jobId: job.id, filename }]);
+    }
+    pollerRef.current?.start({ jobId: job.id, filename });
   }
 
   async function uploadSelectedFiles() {
@@ -428,41 +472,46 @@ export default function IngestionPage() {
     setUploading(true);
     try {
       const token = await getToken();
-      let uploadedFilenames: string[];
-      try {
-        uploadedFilenames = await uploadWithDirectR2(token, selectedFiles);
-      } catch (err) {
-        if (!isNonR2StorageConfigError(err)) {
-          const selectedKeys = selectedFiles.map(fileKey);
-          updateUploadRows(
-            selectedKeys,
-            "failed",
-            formatApiError(err, "Unable to upload document."),
-          );
-          throw err;
-        }
+      const items = selectedFiles.map((file, index) => ({
+        key: fileKey(file, index),
+        file,
+      }));
+      await processDocumentUploads(items, {
+        presign: async (files) =>
+          (
+            await presignDocumentUploads(
+              token,
+              files.map((file) => ({
+                filename: file.name,
+                size_bytes: file.size,
+                content_type: file.type || "application/octet-stream",
+              })),
+            )
+          ).uploads,
+        put: putFileToStorage,
+        complete: async (upload) => {
+          const response = await completeDocumentUploads(token, [
+            { upload_id: upload.upload_id, filename: upload.filename },
+          ]);
+          const completed = response.files[0];
+          if (!completed) throw new Error("The upload service did not finalize this file.");
+          return completed;
+        },
+        startIngest: async (source) => (await startIngest(token, source)).job,
+        onUpdate: (key, update) => {
+          updateUploadRow(key, update);
+          if (update.job && update.completedFilename) {
+            registerJob(key, update.completedFilename, update.job);
+          }
+        },
+        errorMessage: formatApiError,
+      });
 
-        uploadedFilenames = await uploadWithMultipartFallback(token, selectedFiles);
-      }
-
-      const filenames = uploadedFilenames.join(", ");
-      const previewFilename = uploadedFilenames[0];
-      setNotice(
-        `Upload complete: ${filenames}. Run ingest to index these documents before they are searchable.`,
-      );
-      setSourceFilter(previewFilename);
-      setAllSources(false);
-      setShowContent(false);
+      setNotice("Each finalized document has been sent to its own ingestion job.");
       setSelectedFiles([]);
       if (fileInputRef.current) {
         fileInputRef.current.value = "";
       }
-      await loadPreview(token, {
-        source: previewFilename,
-        all_sources: false,
-        offset: 0,
-        include_content: false,
-      });
     } catch (err) {
       setError(formatApiError(err, "Unable to upload document."));
     } finally {
@@ -470,33 +519,21 @@ export default function IngestionPage() {
     }
   }
 
-  async function ingestDocuments() {
-    if (ingesting || !canManageDocuments(user)) {
+  async function retryIngestion(row: UploadRow) {
+    if (!row.completedFilename || row.status !== "failed" || !canManageDocuments(user)) {
       return;
     }
-
-    setNotice(null);
-    setError(null);
-    setIngesting(true);
+    updateUploadRow(row.key, { status: "queued", detail: undefined });
     try {
       const token = await getToken();
-      const created = await startIngest(token);
-      setIngestJob(created.job);
-
-      let current = created.job;
-      while (current.status === "queued" || current.status === "running") {
-        await new Promise((resolve) => setTimeout(resolve, 1500));
-        current = (await getIngestJob(token, current.id)).job;
-        setIngestJob(current);
-      }
-
-      if (normalizeSource(sourceFilter) || allSources) {
-        await loadPreview(token, { offset: 0 });
-      }
+      const created = await startIngest(token, row.completedFilename);
+      registerJob(row.key, row.completedFilename, created.job);
     } catch (err) {
-      setError(formatApiError(err, "Unable to ingest new documents."));
-    } finally {
-      setIngesting(false);
+      updateUploadRow(row.key, {
+        status: "failed",
+        detail: formatApiError(err, "Unable to retry document ingestion."),
+        failureStage: "ingestion",
+      });
     }
   }
 
@@ -638,25 +675,78 @@ export default function IngestionPage() {
                     </p>
                     <ul className="mt-2 space-y-1 text-[13px] leading-5 text-[#323b45]">
                       {uploadRows.map((file) => (
-                        <li className="min-w-0" key={file.key}>
+                        <li
+                          className="min-w-0 border-b border-outline-variant/60 py-2 last:border-b-0"
+                          key={file.key}
+                        >
                           <div className="flex items-center justify-between gap-3">
-                            <span className="truncate">{file.filename}</span>
+                            <span className="min-w-0">
+                              <span className="block truncate">{file.filename}</span>
+                              <span className="block text-[11px] text-[#7b8492]">
+                                {formatFileSize(file.size)}
+                              </span>
+                            </span>
                             <span
                               className={`shrink-0 text-[12px] font-semibold ${
                                 file.status === "failed"
                                   ? "text-[#743f2c]"
-                                  : file.status === "done"
+                                  : file.status === "indexed"
                                     ? "text-primary"
                                     : "text-[#626b79]"
                               }`}
                             >
+                              {file.status === "processing" ? (
+                                <Loader2 className="mr-1 inline h-3 w-3 animate-spin" />
+                              ) : null}
                               {uploadStatusLabel(file.status)}
                             </span>
                           </div>
+                          {file.status === "uploading" ? (
+                            <div className="mt-2 flex items-center gap-2">
+                              <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-[#dfe7e2]">
+                                <div
+                                  className="h-full rounded-full bg-primary transition-[width]"
+                                  style={{ width: `${file.progress}%` }}
+                                />
+                              </div>
+                              <span className="w-9 text-right text-[11px] font-semibold text-[#626b79]">
+                                {file.progress}%
+                              </span>
+                            </div>
+                          ) : null}
+                          {file.status === "indexed" ? (
+                            <p className="text-[12px] text-primary">
+                              {file.chunks ?? 0} chunks indexed
+                            </p>
+                          ) : null}
                           {file.detail ? (
-                            <p className="truncate text-[12px] text-[#626b79]">
+                            <p
+                              className={`text-[12px] ${
+                                file.status === "failed"
+                                  ? "text-[#743f2c]"
+                                  : "text-[#626b79]"
+                              }`}
+                            >
                               {file.detail}
                             </p>
+                          ) : null}
+                          {file.status === "failed" &&
+                          file.failureStage === "ingestion" &&
+                          file.completedFilename ? (
+                            isStoredDocumentMissing(file.detail) ? (
+                              <p className="mt-1 text-[12px] font-semibold text-[#743f2c]">
+                                Select this file again to re-upload it.
+                              </p>
+                            ) : (
+                              <button
+                                className="mt-1 inline-flex items-center gap-1 text-[12px] font-semibold text-primary hover:underline"
+                                onClick={() => void retryIngestion(file)}
+                                type="button"
+                              >
+                                <RefreshCw className="h-3 w-3" />
+                                Retry ingestion
+                              </button>
+                            )
                           ) : null}
                         </li>
                       ))}
@@ -675,19 +765,6 @@ export default function IngestionPage() {
                     <Upload className="h-4 w-4" />
                   )}
                   {uploading ? "Uploading..." : "Upload selected"}
-                </button>
-                <button
-                  className="inline-flex h-11 items-center justify-center gap-2 rounded border border-outline-variant bg-white px-4 text-[14px] font-semibold text-[#26384d] transition hover:bg-surface-container-low disabled:cursor-not-allowed disabled:opacity-60"
-                  disabled={ingesting || uploading}
-                  onClick={() => void ingestDocuments()}
-                  type="button"
-                >
-                  {ingesting ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                  ) : (
-                    <Database className="h-4 w-4" />
-                  )}
-                  Run ingest
                 </button>
                 <button
                   className="inline-flex h-11 items-center justify-center gap-2 rounded border border-outline-variant bg-white px-4 text-[14px] font-semibold text-[#26384d] transition hover:bg-surface-container-low disabled:cursor-not-allowed disabled:opacity-60"
@@ -720,11 +797,6 @@ export default function IngestionPage() {
                 />
               </div>
 
-              {ingestJob ? (
-                <p className="mt-4 rounded bg-[#edf8f1] px-3 py-2 text-[13px] leading-5 text-primary">
-                  {formatIngestSummary(ingestJob)}
-                </p>
-              ) : null}
             </div>
 
             <section className="rounded border border-outline-variant bg-white p-5 shadow-tonal">

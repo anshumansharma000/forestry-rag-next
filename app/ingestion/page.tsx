@@ -3,9 +3,11 @@
 import {
   AlertCircle,
   ArrowLeft,
+  Bell,
   ChevronLeft,
   ChevronRight,
   CheckCircle2,
+  Clock3,
   Eye,
   EyeOff,
   FileText,
@@ -40,6 +42,7 @@ import {
 import {
   DocumentFlowStatus,
   processDocumentUploads,
+  summarizeUploadBatch,
   UploadFlowUpdate,
 } from "../../lib/document-upload-flow";
 import {
@@ -101,6 +104,17 @@ type UploadRow = {
   jobId?: string;
   chunks?: number;
   failureStage?: "upload" | "completion" | "ingestion";
+  jobProgress?: number;
+  etaSeconds?: number;
+  jobStartedAt?: string | null;
+  lastCheckedAt?: string;
+};
+
+type ActivityUpdate = {
+  id: string;
+  message: string;
+  tone: "info" | "success" | "error";
+  createdAt: string;
 };
 
 type PreviewParamsResult =
@@ -137,6 +151,67 @@ function formatFileSize(bytes: number | null) {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function numericMetadata(job: IngestJob, keys: string[]) {
+  for (const key of keys) {
+    const value = job.metadata[key];
+    if (typeof value === "number" && Number.isFinite(value)) return value;
+  }
+  return undefined;
+}
+
+function jobProgress(job: IngestJob) {
+  const value = numericMetadata(job, ["progress_percent", "progress"]);
+  if (value == null) return undefined;
+  const percentage = value <= 1 ? value * 100 : value;
+  return Math.round(Math.min(100, Math.max(0, percentage)));
+}
+
+function jobEtaSeconds(job: IngestJob) {
+  const value = numericMetadata(job, [
+    "eta_seconds",
+    "estimated_remaining_seconds",
+  ]);
+  return value == null ? undefined : Math.max(0, Math.round(value));
+}
+
+function formatDuration(totalSeconds: number) {
+  const seconds = Math.max(0, Math.round(totalSeconds));
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  const remainder = seconds % 60;
+  return remainder ? `${minutes}m ${remainder}s` : `${minutes}m`;
+}
+
+function activityMessage(filename: string, job: IngestJob) {
+  switch (job.status) {
+    case "queued":
+      return `${filename} is queued for ingestion.`;
+    case "running":
+      return `${filename} ingestion is now processing.`;
+    case "succeeded":
+      return `${filename} was indexed successfully.`;
+    case "failed":
+      return `${filename} failed: ${job.error || "Ingestion failed."}`;
+  }
+}
+
+function flowActivityMessage(filename: string, status: DocumentFlowStatus) {
+  switch (status) {
+    case "selected":
+      return `${filename} is ready to upload.`;
+    case "requesting_upload":
+      return `Preparing a secure upload for ${filename}.`;
+    case "uploading":
+      return `${filename} is uploading.`;
+    case "finalizing":
+      return `${filename} uploaded; finalizing storage.`;
+    case "queued":
+      return `${filename} is queued for ingestion.`;
+    case "failed":
+      return `${filename} could not continue.`;
+  }
 }
 
 function isStoredDocumentMissing(message?: string) {
@@ -202,9 +277,19 @@ export default function IngestionPage() {
   );
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const [uploadRows, setUploadRows] = useState<UploadRow[]>([]);
+  const [activityUpdates, setActivityUpdates] = useState<ActivityUpdate[]>([]);
+  const [now, setNow] = useState(() => Date.now());
   const fileInputRef = useRef<HTMLInputElement>(null);
   const authRef = useRef<AuthState | null>(null);
   const pollerRef = useRef<IngestJobPoller | null>(null);
+  const announcedUpdatesRef = useRef(new Set<string>());
+  const lastBatchSummaryRef = useRef<string | null>(null);
+
+  function addActivityUpdate(update: ActivityUpdate) {
+    if (announcedUpdatesRef.current.has(update.id)) return;
+    announcedUpdatesRef.current.add(update.id);
+    setActivityUpdates((updates) => [update, ...updates].slice(0, 6));
+  }
 
   async function getToken() {
     const nextAuth = await ensureFreshAuth(authRef.current ?? auth);
@@ -319,6 +404,33 @@ export default function IngestionPage() {
   }, []);
 
   useEffect(() => {
+    const hasActiveJob = uploadRows.some(
+      (row) => row.status === "queued" || row.status === "processing",
+    );
+    if (!hasActiveJob) return;
+    const timer = window.setInterval(() => setNow(Date.now()), 5_000);
+    return () => window.clearInterval(timer);
+  }, [uploadRows]);
+
+  useEffect(() => {
+    const summary = summarizeUploadBatch(uploadRows);
+    if (!summary) {
+      lastBatchSummaryRef.current = null;
+      return;
+    }
+    if (lastBatchSummaryRef.current === summary.message) return;
+    lastBatchSummaryRef.current = summary.message;
+
+    if (summary.tone === "success") {
+      setError(null);
+      setNotice(summary.message);
+    } else {
+      setNotice(null);
+      setError(summary.message);
+    }
+  }, [uploadRows]);
+
+  useEffect(() => {
     if (!user) return;
 
     const poller = new IngestJobPoller(
@@ -327,6 +439,7 @@ export default function IngestionPage() {
         return (await getIngestJob(token, jobId)).job;
       },
       (filename, job) => {
+        const checkedAt = new Date().toISOString();
         setUploadRows((rows) =>
           rows.map((row) =>
             row.jobId === job.id
@@ -341,10 +454,26 @@ export default function IngestionPage() {
                   detail: job.status === "failed" ? job.error || "Ingestion failed." : undefined,
                   chunks: job.status === "succeeded" ? job.result?.chunks_added ?? job.result?.chunks : undefined,
                   failureStage: job.status === "failed" ? "ingestion" : undefined,
+                  jobProgress: jobProgress(job),
+                  etaSeconds: jobEtaSeconds(job),
+                  jobStartedAt: job.started_at,
+                  lastCheckedAt: checkedAt,
                 }
               : row,
           ),
         );
+
+        addActivityUpdate({
+          id: `${job.id}:${job.status}`,
+          message: activityMessage(filename, job),
+          tone:
+            job.status === "failed"
+              ? "error"
+              : job.status === "succeeded"
+                ? "success"
+                : "info",
+          createdAt: checkedAt,
+        });
 
         if (job.status === "succeeded" || job.status === "failed") {
           const remaining = readActiveJobs(user.id).filter(
@@ -357,21 +486,28 @@ export default function IngestionPage() {
           setAllSources(false);
         }
       },
-      (filename, pollingError) => {
+      (filename, jobId, pollingError) => {
+        const message = formatApiError(
+          pollingError,
+          "Unable to refresh ingestion status.",
+        );
         setUploadRows((rows) =>
           rows.map((row) =>
             row.completedFilename === filename &&
             (row.status === "queued" || row.status === "processing")
               ? {
                   ...row,
-                  detail: formatApiError(
-                    pollingError,
-                    "Unable to refresh ingestion status.",
-                  ),
+                  detail: `${message} Retrying automatically.`,
                 }
               : row,
           ),
         );
+        addActivityUpdate({
+          id: `${jobId}:polling-error`,
+          message: `${filename}: ${message} Status checks will retry automatically.`,
+          tone: "error",
+          createdAt: new Date().toISOString(),
+        });
       },
     );
     pollerRef.current = poller;
@@ -421,6 +557,7 @@ export default function IngestionPage() {
     );
     setNotice(null);
     setError(null);
+    lastBatchSummaryRef.current = null;
   }
 
   function updateUploadRow(
@@ -437,20 +574,37 @@ export default function IngestionPage() {
 
   function registerJob(key: string, filename: string, job: IngestJob) {
     updateUploadRow(key, {
-      status: job.status === "running" ? "processing" : "queued",
+      status:
+        job.status === "running"
+          ? "processing"
+          : job.status === "succeeded"
+            ? "indexed"
+            : job.status,
       completedFilename: filename,
       job,
     });
     setUploadRows((rows) =>
       rows.map((row) => (row.key === key ? { ...row, jobId: job.id } : row)),
     );
-    if (user) {
+    const terminal = job.status === "succeeded" || job.status === "failed";
+    if (user && !terminal) {
       const active = readActiveJobs(user.id).filter(
         ({ jobId }) => jobId !== job.id,
       );
       writeActiveJobs(user.id, [...active, { jobId: job.id, filename }]);
     }
-    pollerRef.current?.start({ jobId: job.id, filename });
+    if (!terminal) pollerRef.current?.start({ jobId: job.id, filename });
+    addActivityUpdate({
+      id: `${job.id}:${job.status}`,
+      message: activityMessage(filename, job),
+      tone:
+        job.status === "failed"
+          ? "error"
+          : job.status === "succeeded"
+            ? "success"
+            : "info",
+      createdAt: new Date().toISOString(),
+    });
   }
 
   async function uploadSelectedFiles() {
@@ -500,6 +654,24 @@ export default function IngestionPage() {
         startIngest: async (source) => (await startIngest(token, source)).job,
         onUpdate: (key, update) => {
           updateUploadRow(key, update);
+          const filename =
+            items.find((item) => item.key === key)?.file.name ?? "Document";
+          if (update.status && update.status !== "failed") {
+            addActivityUpdate({
+              id: `${key}:${update.status}`,
+              message: flowActivityMessage(filename, update.status),
+              tone: "info",
+              createdAt: new Date().toISOString(),
+            });
+          }
+          if (update.status === "failed") {
+            addActivityUpdate({
+              id: `${key}:failed:${update.failureStage}`,
+              message: `${filename}: ${update.detail || "The ingestion flow failed."}`,
+              tone: "error",
+              createdAt: new Date().toISOString(),
+            });
+          }
           if (update.job && update.completedFilename) {
             registerJob(key, update.completedFilename, update.job);
           }
@@ -523,6 +695,9 @@ export default function IngestionPage() {
     if (!row.completedFilename || row.status !== "failed" || !canManageDocuments(user)) {
       return;
     }
+    setError(null);
+    setNotice(null);
+    lastBatchSummaryRef.current = null;
     updateUploadRow(row.key, { status: "queued", detail: undefined });
     try {
       const token = await getToken();
@@ -597,6 +772,9 @@ export default function IngestionPage() {
     preview && !scopeDirty && preview.offset > 0 && !previewing,
   );
   const canGoForward = Boolean(preview?.has_more && !scopeDirty && !previewing);
+  const activeJobCount = uploadRows.filter(
+    (row) => row.status === "queued" || row.status === "processing",
+  ).length;
 
   return (
     <main className="min-h-screen bg-surface px-5 py-6 text-on-surface sm:px-8">
@@ -658,6 +836,52 @@ export default function IngestionPage() {
                 </div>
               </div>
 
+              <div
+                aria-live="polite"
+                className="mt-5 rounded border border-outline-variant bg-surface-container-lowest p-3"
+              >
+                <div className="flex items-center justify-between gap-3">
+                  <p className="inline-flex items-center gap-2 text-[13px] font-bold text-[#26384d]">
+                    <Bell className="h-4 w-4 text-primary" />
+                    Admin updates
+                  </p>
+                  <span className="rounded-full bg-[#e5eee9] px-2 py-0.5 text-[11px] font-semibold text-primary">
+                    {activeJobCount
+                      ? `${activeJobCount} active`
+                      : "No active jobs"}
+                  </span>
+                </div>
+                {activityUpdates.length ? (
+                  <ul className="mt-2 space-y-2">
+                    {activityUpdates.map((update) => (
+                      <li className="flex items-start gap-2" key={update.id}>
+                        {update.tone === "error" ? (
+                          <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-[#a34f35]" />
+                        ) : update.tone === "success" ? (
+                          <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
+                        ) : (
+                          <Clock3 className="mt-0.5 h-4 w-4 shrink-0 text-[#626b79]" />
+                        )}
+                        <span className="min-w-0 text-[12px] leading-4 text-[#4e5966]">
+                          <span className="block break-words">{update.message}</span>
+                          <time className="text-[11px] text-[#7b8492]">
+                            {new Date(update.createdAt).toLocaleTimeString([], {
+                              hour: "2-digit",
+                              minute: "2-digit",
+                            })}
+                          </time>
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="mt-2 text-[12px] leading-4 text-[#626b79]">
+                    Upload a document to see preparation, ingestion, and error
+                    updates here.
+                  </p>
+                )}
+              </div>
+
               <div className="mt-5 grid gap-3">
                 <button
                   className="inline-flex h-11 items-center justify-center gap-2 rounded border border-outline-variant bg-white px-4 text-[14px] font-semibold text-[#26384d] transition hover:bg-surface-container-low disabled:cursor-not-allowed disabled:opacity-60"
@@ -712,6 +936,50 @@ export default function IngestionPage() {
                               <span className="w-9 text-right text-[11px] font-semibold text-[#626b79]">
                                 {file.progress}%
                               </span>
+                            </div>
+                          ) : null}
+                          {file.status === "queued" ||
+                          file.status === "processing" ? (
+                            <div className="mt-2">
+                              <div className="flex items-center justify-between gap-2 text-[11px] font-semibold text-[#626b79]">
+                                <span>
+                                  {file.status === "queued"
+                                    ? "Waiting for a worker"
+                                    : file.jobProgress == null
+                                      ? "Indexing in progress"
+                                      : `${file.jobProgress}% indexed`}
+                                </span>
+                                <span>
+                                  {file.etaSeconds != null
+                                    ? `ETA ${formatDuration(file.etaSeconds)}`
+                                    : file.jobStartedAt
+                                      ? `${formatDuration(
+                                          (now -
+                                            new Date(file.jobStartedAt).getTime()) /
+                                            1000,
+                                        )} elapsed`
+                                      : "ETA pending"}
+                                </span>
+                              </div>
+                              <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-[#dfe7e2]">
+                                {file.jobProgress != null ? (
+                                  <div
+                                    className="h-full rounded-full bg-primary transition-[width]"
+                                    style={{ width: `${file.jobProgress}%` }}
+                                  />
+                                ) : (
+                                  <div className="h-full w-1/3 animate-pulse rounded-full bg-primary" />
+                                )}
+                              </div>
+                              {file.lastCheckedAt ? (
+                                <p className="mt-1 text-[11px] text-[#7b8492]">
+                                  Status last checked at{" "}
+                                  {new Date(file.lastCheckedAt).toLocaleTimeString(
+                                    [],
+                                    { hour: "2-digit", minute: "2-digit" },
+                                  )}
+                                </p>
+                              ) : null}
                             </div>
                           ) : null}
                           {file.status === "indexed" ? (

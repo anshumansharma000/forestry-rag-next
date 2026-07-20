@@ -4,6 +4,11 @@ export type ActiveIngestJob = { jobId: string; filename: string };
 
 type Timer = ReturnType<typeof setTimeout>;
 
+const INITIAL_POLL_DELAY_MS = 5_000;
+const STEADY_POLL_DELAY_MS = 10_000;
+const POLL_ERROR_DELAY_MS = 15_000;
+const BACKGROUND_POLL_DELAY_MS = 30_000;
+
 export class IngestJobPoller {
   private active = new Map<string, { startedAt: number; timer?: Timer }>();
   private stopped = false;
@@ -11,13 +16,17 @@ export class IngestJobPoller {
   constructor(
     private readonly getJob: (jobId: string) => Promise<IngestJob>,
     private readonly onJob: (filename: string, job: IngestJob) => void,
-    private readonly onError: (filename: string, error: unknown) => void,
+    private readonly onError: (
+      filename: string,
+      jobId: string,
+      error: unknown,
+    ) => void,
   ) {}
 
   start({ filename, jobId }: ActiveIngestJob, immediate = false) {
     if (this.stopped || this.active.has(jobId)) return;
     this.active.set(jobId, { startedAt: Date.now() });
-    this.schedule(filename, jobId, immediate ? 0 : 2_000);
+    this.schedule(filename, jobId, immediate ? 0 : INITIAL_POLL_DELAY_MS);
   }
 
   private schedule(filename: string, jobId: string, delay: number) {
@@ -38,11 +47,21 @@ export class IngestJobPoller {
         return;
       }
       const elapsed = Date.now() - state.startedAt;
-      this.schedule(filename, jobId, elapsed >= 30_000 ? 5_000 : 2_000);
+      const pageIsHidden =
+        typeof document !== "undefined" && document.visibilityState === "hidden";
+      this.schedule(
+        filename,
+        jobId,
+        pageIsHidden
+          ? BACKGROUND_POLL_DELAY_MS
+          : elapsed >= 30_000
+            ? STEADY_POLL_DELAY_MS
+            : INITIAL_POLL_DELAY_MS,
+      );
     } catch (error) {
       if (!this.active.has(jobId) || this.stopped) return;
-      this.onError(filename, error);
-      this.schedule(filename, jobId, 5_000);
+      this.onError(filename, jobId, error);
+      this.schedule(filename, jobId, POLL_ERROR_DELAY_MS);
     }
   }
 

@@ -197,6 +197,43 @@ export type CompletedUpload = {
   path: string;
 };
 
+export type DocumentLibraryItem = {
+  id: string;
+  filename: string;
+  title: string;
+  kind: string;
+  page_count: number | null;
+  document_type: string;
+  authority: string | null;
+  years: string[];
+  chunk_count: number;
+  status: "indexed";
+  ingested_at: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+};
+
+export type DocumentLibraryResponse = {
+  items: DocumentLibraryItem[];
+  pagination: {
+    offset: number;
+    limit: number;
+    total: number;
+    has_more: boolean;
+  };
+};
+
+export type DocumentLibraryParams = {
+  search?: string;
+  kind?: "pdf" | "docx" | "txt";
+  document_type?: string;
+  year?: string;
+  sort_by: "updated_at" | "created_at" | "title" | "source" | "page_count";
+  sort_order: "asc" | "desc";
+  offset: number;
+  limit: number;
+};
+
 /** @deprecated Use PresignedUpload. */
 export type DocumentUpload = PresignedUpload;
 
@@ -512,6 +549,27 @@ export function completeDocumentUploads(
     method: "POST",
     token,
     body: JSON.stringify({ files: uploads }),
+  });
+}
+
+export function listDocuments(
+  token: string,
+  params: DocumentLibraryParams,
+  signal?: AbortSignal,
+) {
+  const query = new URLSearchParams();
+  if (params.search?.trim()) query.set("search", params.search.trim());
+  if (params.kind) query.set("kind", params.kind);
+  if (params.document_type) query.set("document_type", params.document_type);
+  if (params.year) query.set("year", params.year);
+  query.set("sort_by", params.sort_by);
+  query.set("sort_order", params.sort_order);
+  query.set("offset", String(Math.max(0, params.offset)));
+  query.set("limit", String(Math.min(100, Math.max(1, params.limit))));
+
+  return apiRequest<DocumentLibraryResponse>(`/documents?${query.toString()}`, {
+    token,
+    signal,
   });
 }
 

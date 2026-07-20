@@ -35,6 +35,42 @@ export type UploadFlowDependencies = {
   errorMessage: (error: unknown, fallback: string) => string;
 };
 
+export type UploadBatchSummary = {
+  tone: "success" | "error";
+  message: string;
+};
+
+export function summarizeUploadBatch(
+  files: Array<{ filename: string; status: string }>,
+): UploadBatchSummary | null {
+  if (
+    files.length === 0 ||
+    files.some(({ status }) => status !== "indexed" && status !== "failed")
+  ) {
+    return null;
+  }
+
+  const failed = files.filter(({ status }) => status === "failed");
+  const succeededCount = files.length - failed.length;
+
+  if (failed.length === 0) {
+    return {
+      tone: "success",
+      message: `${succeededCount} ${succeededCount === 1 ? "document" : "documents"} ingested successfully.`,
+    };
+  }
+
+  const failedNames = failed.map(({ filename }) => filename).join(", ");
+  const successMessage = succeededCount
+    ? ` ${succeededCount} ${succeededCount === 1 ? "document was" : "documents were"} ingested successfully.`
+    : "";
+
+  return {
+    tone: "error",
+    message: `${failed.length} of ${files.length} ${files.length === 1 ? "document" : "documents"} failed: ${failedNames}.${successMessage}`,
+  };
+}
+
 async function runWithConcurrency<T>(
   items: T[],
   limit: number,
@@ -133,4 +169,3 @@ export async function processDocumentUploads(
     },
   );
 }
-

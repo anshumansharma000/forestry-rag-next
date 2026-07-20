@@ -7,6 +7,7 @@ import {
   Copy,
   Database,
   FileText,
+  Files,
   KeyRound,
   Loader2,
   LogOut,
@@ -984,6 +985,7 @@ function Sidebar({
       <nav className="mt-8 px-5">
         <ul className="space-y-3">
           <SidebarLink active href="/" icon={MessageSquareText} label="Chat" />
+          <SidebarLink href="/documents" icon={Files} label="Documents" />
           <SidebarLink href="/ingestion" icon={FileText} label="Ingestion" />
           <SidebarLink href="/profile" icon={UserCircle} label="Profile" />
         </ul>
@@ -1110,6 +1112,13 @@ function Header({
       </div>
       <div className="flex items-center gap-3 text-[#626b79] sm:gap-4">
         <StatusPill ready={configReady} />
+        <a
+          className="hidden h-10 items-center gap-2 rounded border border-outline-variant px-3 text-[14px] font-semibold text-[#26384d] hover:bg-surface-container-low sm:inline-flex"
+          href="/documents"
+        >
+          <Files className="h-4 w-4" />
+          Documents
+        </a>
         {isAdminUser(user) ? (
           <a
             className="hidden h-10 items-center gap-2 rounded border border-outline-variant px-3 text-[14px] font-semibold text-[#26384d] hover:bg-surface-container-low sm:inline-flex"
@@ -1488,6 +1497,12 @@ function AssistantIntro({ user }: { user: AuthUser }) {
         Answers include citations and excerpts from retrieved chunks.
       </p>
       <div className="mt-7 grid gap-3 text-left sm:grid-cols-2">
+        <HomeAction
+          href="/documents"
+          icon={Files}
+          label="Documents"
+          text="Browse the department sources available to the assistant."
+        />
         <HomeAction
           href="/profile"
           icon={UserCircle}

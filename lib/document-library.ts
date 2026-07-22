@@ -13,7 +13,7 @@ export const DEFAULT_DOCUMENT_QUERY: DocumentLibraryQuery = {
   limit: 25,
 };
 
-const kinds = new Set(["pdf", "docx", "txt"]);
+const kinds = new Set(["pdf", "docx", "txt", "ppt", "pptx"]);
 const sortFields = new Set([
   "updated_at",
   "created_at",

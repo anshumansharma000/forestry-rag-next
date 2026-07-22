@@ -1493,8 +1493,8 @@ function AssistantIntro({ user }: { user: AuthUser }) {
         Aranyabodh
       </h3>
       <p className="mt-3 text-[17px] leading-6 text-[#2d3331]">
-        Ask questions over indexed PDF, DOCX, and TXT department sources.
-        Answers include citations and excerpts from retrieved chunks.
+        Ask questions over indexed PDF, DOCX, TXT, PPT, and PPTX department
+        sources. Answers include citations and excerpts from retrieved chunks.
       </p>
       <div className="mt-7 grid gap-3 text-left sm:grid-cols-2">
         <HomeAction

@@ -266,6 +266,8 @@ export default function DocumentsPage() {
                 <option value="pdf">PDF</option>
                 <option value="docx">DOCX</option>
                 <option value="txt">TXT</option>
+                <option value="ppt">PPT</option>
+                <option value="pptx">PPTX</option>
               </SelectControl>
               <SelectControl label="Document type" value={query.document_type ?? ""} onChange={(value) => setControl({ document_type: value || undefined })}>
                 <option value="">All document types</option>

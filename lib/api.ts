@@ -225,7 +225,7 @@ export type DocumentLibraryResponse = {
 
 export type DocumentLibraryParams = {
   search?: string;
-  kind?: "pdf" | "docx" | "txt";
+  kind?: "pdf" | "docx" | "txt" | "ppt" | "pptx";
   document_type?: string;
   year?: string;
   sort_by: "updated_at" | "created_at" | "title" | "source" | "page_count";

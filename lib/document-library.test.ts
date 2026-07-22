@@ -48,6 +48,12 @@ describe("document library query parameters", () => {
 
     expect(parsed).toEqual({ ...DEFAULT_DOCUMENT_QUERY, limit: 100 });
   });
+
+  it.each(["ppt", "pptx"])("accepts %s as a document kind", (kind) => {
+    expect(parseDocumentQuery(new URLSearchParams(`kind=${kind}`)).kind).toBe(
+      kind,
+    );
+  });
 });
 
 describe("document library pagination", () => {

@@ -1,5 +1,20 @@
 import type { CompletedUpload, IngestJob, PresignedUpload } from "./api";
 
+export const SUPPORTED_DOCUMENT_EXTENSIONS = [
+  "pdf",
+  "docx",
+  "txt",
+  "ppt",
+  "pptx",
+] as const;
+
+export function isSupportedDocumentFilename(filename: string) {
+  const extension = filename.toLowerCase().split(".").pop();
+  return SUPPORTED_DOCUMENT_EXTENSIONS.some(
+    (supported) => supported === extension,
+  );
+}
+
 export type DocumentFlowStatus =
   | "selected"
   | "requesting_upload"

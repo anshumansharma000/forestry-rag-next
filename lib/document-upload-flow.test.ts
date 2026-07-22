@@ -1,5 +1,18 @@
 import { describe, expect, it } from "vitest";
-import { summarizeUploadBatch } from "./document-upload-flow";
+import {
+  isSupportedDocumentFilename,
+  summarizeUploadBatch,
+} from "./document-upload-flow";
+
+describe("supported upload formats", () => {
+  it.each(["briefing.ppt", "briefing.PPTX"])("accepts %s", (filename) => {
+    expect(isSupportedDocumentFilename(filename)).toBe(true);
+  });
+
+  it("continues to reject unsupported formats", () => {
+    expect(isSupportedDocumentFilename("briefing.key")).toBe(false);
+  });
+});
 
 describe("upload batch completion summaries", () => {
   it("waits until every file has finished", () => {

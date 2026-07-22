@@ -41,6 +41,7 @@ import {
 } from "../../lib/api";
 import {
   DocumentFlowStatus,
+  isSupportedDocumentFilename,
   processDocumentUploads,
   summarizeUploadBatch,
   UploadFlowUpdate,
@@ -612,12 +613,11 @@ export default function IngestionPage() {
       return;
     }
 
-    const unsupportedFile = selectedFiles.find((file) => {
-      const extension = file.name.toLowerCase().split(".").pop();
-      return extension !== "pdf" && extension !== "docx" && extension !== "txt";
-    });
+    const unsupportedFile = selectedFiles.find(
+      (file) => !isSupportedDocumentFilename(file.name),
+    );
     if (unsupportedFile) {
-      setError("Only .pdf, .docx, and .txt files are supported.");
+      setError("Only .pdf, .docx, .txt, .ppt, and .pptx files are supported.");
       return;
     }
 
@@ -792,8 +792,8 @@ export default function IngestionPage() {
               Upload & Ingestion
             </h1>
             <p className="mt-2 text-[14px] text-[#626b79]">
-              Upload PDF, DOCX, or TXT sources, run indexing, and inspect the
-              chunks that are available to the assistant.
+              Upload PDF, DOCX, TXT, PPT, or PPTX sources, run indexing, and
+              inspect the chunks that are available to the assistant.
             </p>
           </div>
           <div className="inline-flex w-fit items-center gap-2 rounded border border-[#b7d6c4] bg-[#edf8f1] px-3 py-2 text-[13px] font-semibold text-primary">
@@ -1294,7 +1294,7 @@ export default function IngestionPage() {
         )}
 
         <input
-          accept=".pdf,.docx,.txt"
+          accept=".pdf,.docx,.txt,.ppt,.pptx"
           className="hidden"
           disabled={uploading}
           multiple

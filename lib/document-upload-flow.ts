@@ -8,11 +8,42 @@ export const SUPPORTED_DOCUMENT_EXTENSIONS = [
   "pptx",
 ] as const;
 
+export const MAX_DOCUMENT_FILES_PER_BATCH = 50;
+export const MAX_DOCUMENT_FILE_SIZE_BYTES = 150 * 1024 * 1024;
+export const DOCUMENT_UPLOAD_LIMIT_COPY =
+  "Maximum 150 MiB per file, up to 50 files.";
+
 export function isSupportedDocumentFilename(filename: string) {
   const extension = filename.toLowerCase().split(".").pop();
   return SUPPORTED_DOCUMENT_EXTENSIONS.some(
     (supported) => supported === extension,
   );
+}
+
+type UploadCandidate = Pick<File, "name" | "size">;
+
+export function validateDocumentUploadBatch(
+  files: UploadCandidate[],
+): string | null {
+  if (files.length > MAX_DOCUMENT_FILES_PER_BATCH) {
+    return `You can upload up to ${MAX_DOCUMENT_FILES_PER_BATCH} files at a time. You selected ${files.length}.`;
+  }
+
+  const unsupportedFile = files.find(
+    (file) => !isSupportedDocumentFilename(file.name),
+  );
+  if (unsupportedFile) {
+    return `${unsupportedFile.name} is not supported. Choose PDF, TXT, DOCX, PPT, or PPTX files.`;
+  }
+
+  const oversizedFile = files.find(
+    (file) => file.size > MAX_DOCUMENT_FILE_SIZE_BYTES,
+  );
+  if (oversizedFile) {
+    return `${oversizedFile.name} is larger than 150 MiB. ${DOCUMENT_UPLOAD_LIMIT_COPY}`;
+  }
+
+  return null;
 }
 
 export type DocumentFlowStatus =
@@ -30,7 +61,7 @@ export type UploadFlowFile = {
 
 export type UploadFlowUpdate = {
   status?: DocumentFlowStatus;
-  progress?: number;
+  uploadProgress?: number;
   detail?: string;
   completedFilename?: string;
   job?: IngestJob;
@@ -112,6 +143,20 @@ export async function processDocumentUploads(
   const { complete, errorMessage, onUpdate, presign, put, startIngest } =
     dependencies;
 
+  const validationError = validateDocumentUploadBatch(
+    items.map(({ file }) => file),
+  );
+  if (validationError) {
+    items.forEach(({ key }) =>
+      onUpdate(key, {
+        status: "failed",
+        detail: validationError,
+        failureStage: "upload",
+      }),
+    );
+    return;
+  }
+
   items.forEach(({ key }) => onUpdate(key, { status: "requesting_upload" }));
 
   let uploads: PresignedUpload[];
@@ -138,9 +183,9 @@ export async function processDocumentUploads(
     2,
     async ({ item, upload }) => {
       try {
-        onUpdate(item.key, { status: "uploading", progress: 0 });
-        await put(upload, item.file, (progress) =>
-          onUpdate(item.key, { progress }),
+        onUpdate(item.key, { status: "uploading", uploadProgress: 0 });
+        await put(upload, item.file, (uploadProgress) =>
+          onUpdate(item.key, { uploadProgress }),
         );
       } catch (error) {
         onUpdate(item.key, {
@@ -153,7 +198,7 @@ export async function processDocumentUploads(
 
       let completed: CompletedUpload;
       try {
-        onUpdate(item.key, { status: "finalizing", progress: 100 });
+        onUpdate(item.key, { status: "finalizing", uploadProgress: 100 });
         completed = await complete(upload);
       } catch (error) {
         onUpdate(item.key, {

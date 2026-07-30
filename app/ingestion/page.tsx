@@ -40,11 +40,12 @@ import {
   startIngest,
 } from "../../lib/api";
 import {
+  DOCUMENT_UPLOAD_LIMIT_COPY,
   DocumentFlowStatus,
-  isSupportedDocumentFilename,
   processDocumentUploads,
   summarizeUploadBatch,
   UploadFlowUpdate,
+  validateDocumentUploadBatch,
 } from "../../lib/document-upload-flow";
 import {
   IngestJobPoller,
@@ -99,7 +100,7 @@ type UploadRow = {
   filename: string;
   size: number | null;
   status: UploadStatus;
-  progress: number;
+  uploadProgress: number;
   detail?: string;
   completedFilename?: string;
   jobId?: string;
@@ -527,7 +528,7 @@ export default function IngestionPage() {
               completedFilename: filename,
               jobId,
               size: null,
-              progress: 100,
+              uploadProgress: 100,
               status: "queued" as const,
               detail: "Resuming status checks",
             })),
@@ -546,6 +547,18 @@ export default function IngestionPage() {
 
   function selectFiles(fileList: FileList | null) {
     const files = Array.from(fileList ?? []);
+    const validationError = validateDocumentUploadBatch(files);
+
+    setNotice(null);
+    lastBatchSummaryRef.current = null;
+    if (validationError) {
+      setSelectedFiles([]);
+      setUploadRows([]);
+      setError(validationError);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+      return;
+    }
+
     setSelectedFiles(files);
     setUploadRows(
       files.map((file, index) => ({
@@ -553,12 +566,10 @@ export default function IngestionPage() {
         filename: file.name,
         size: file.size,
         status: "selected",
-        progress: 0,
+        uploadProgress: 0,
       })),
     );
-    setNotice(null);
     setError(null);
-    lastBatchSummaryRef.current = null;
   }
 
   function updateUploadRow(
@@ -613,11 +624,9 @@ export default function IngestionPage() {
       return;
     }
 
-    const unsupportedFile = selectedFiles.find(
-      (file) => !isSupportedDocumentFilename(file.name),
-    );
-    if (unsupportedFile) {
-      setError("Only .pdf, .docx, .txt, .ppt, and .pptx files are supported.");
+    const validationError = validateDocumentUploadBatch(selectedFiles);
+    if (validationError) {
+      setError(validationError);
       return;
     }
 
@@ -892,6 +901,9 @@ export default function IngestionPage() {
                   <Upload className="h-4 w-4" />
                   Choose documents
                 </button>
+                <p className="text-[12px] leading-4 text-[#626b79]">
+                  PDF, TXT, DOCX, PPT, and PPTX. {DOCUMENT_UPLOAD_LIMIT_COPY}
+                </p>
                 {uploadRows.length ? (
                   <div className="rounded border border-outline-variant bg-surface-container-lowest px-3 py-2">
                     <p className="text-[12px] font-semibold uppercase text-[#7b8492]">
@@ -927,14 +939,21 @@ export default function IngestionPage() {
                           </div>
                           {file.status === "uploading" ? (
                             <div className="mt-2 flex items-center gap-2">
-                              <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-[#dfe7e2]">
+                              <div
+                                aria-label={`${file.filename} upload progress`}
+                                aria-valuemax={100}
+                                aria-valuemin={0}
+                                aria-valuenow={file.uploadProgress}
+                                className="h-1.5 flex-1 overflow-hidden rounded-full bg-[#dfe7e2]"
+                                role="progressbar"
+                              >
                                 <div
                                   className="h-full rounded-full bg-primary transition-[width]"
-                                  style={{ width: `${file.progress}%` }}
+                                  style={{ width: `${file.uploadProgress}%` }}
                                 />
                               </div>
                               <span className="w-9 text-right text-[11px] font-semibold text-[#626b79]">
-                                {file.progress}%
+                                {file.uploadProgress}%
                               </span>
                             </div>
                           ) : null}
@@ -961,7 +980,14 @@ export default function IngestionPage() {
                                       : "ETA pending"}
                                 </span>
                               </div>
-                              <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-[#dfe7e2]">
+                              <div
+                                aria-label={`${file.filename} ingestion progress`}
+                                aria-valuemax={100}
+                                aria-valuemin={0}
+                                aria-valuenow={file.jobProgress}
+                                className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-[#dfe7e2]"
+                                role="progressbar"
+                              >
                                 {file.jobProgress != null ? (
                                   <div
                                     className="h-full rounded-full bg-primary transition-[width]"

@@ -19,6 +19,7 @@ afterEach(() => {
 describe("document library query parameters", () => {
   it("constructs every supported server parameter and trims search", () => {
     const params = buildDocumentQuery({
+      status: "failed",
       search: "  forest rules  ",
       kind: "pdf",
       document_type: "rules",
@@ -30,6 +31,7 @@ describe("document library query parameters", () => {
     });
 
     expect(Object.fromEntries(params)).toEqual({
+      status: "failed",
       search: "forest rules",
       kind: "pdf",
       document_type: "rules",
@@ -86,7 +88,7 @@ describe("document library responses", () => {
     expect(response.items).toEqual([]);
     expect(response.pagination.total).toBe(0);
     expect(fetchMock).toHaveBeenCalledWith(
-      "http://127.0.0.1:8000/documents?sort_by=updated_at&sort_order=desc&offset=0&limit=25",
+      "http://127.0.0.1:8000/documents?status=indexed&sort_by=updated_at&sort_order=desc&offset=0&limit=25",
       expect.objectContaining({
         headers: expect.objectContaining({}),
       }),

@@ -18,7 +18,9 @@ import {
   AuthState,
   DocumentLibraryItem,
   DocumentLibraryResponse,
+  getIngestJob,
   listDocuments,
+  startIngest,
 } from "../../lib/api";
 import {
   DEFAULT_DOCUMENT_QUERY,
@@ -26,12 +28,17 @@ import {
   buildDocumentQuery,
   displayMetadata,
   displayTitle,
-  formatIndexedDate,
   nextOffset,
   pageBounds,
   parseDocumentQuery,
   previousOffset,
 } from "../../lib/document-library";
+import {
+  canIngestDocuments,
+  DocumentRetryProcessor,
+  RetryUpdate,
+} from "../../lib/document-retry";
+import { DocumentStatus } from "./document-status";
 
 const DOCUMENT_TYPES = [
   "rules",
@@ -73,8 +80,10 @@ export default function DocumentsPage() {
   const [updating, setUpdating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [retryKey, setRetryKey] = useState(0);
+  const [retryStates, setRetryStates] = useState<Record<string, RetryUpdate>>({});
   const authRef = useRef<AuthState | null>(null);
   const dataRef = useRef<DocumentLibraryResponse | null>(null);
+  const retryProcessorRef = useRef<DocumentRetryProcessor | null>(null);
 
   const commitQuery = useCallback(
     (
@@ -132,6 +141,8 @@ export default function DocumentsPage() {
     };
   }, []);
 
+  useEffect(() => () => retryProcessorRef.current?.stop(), []);
+
   useEffect(() => {
     if (searchInput === (query.search ?? "")) return;
     const timer = window.setTimeout(() => {
@@ -165,6 +176,13 @@ export default function DocumentsPage() {
         }
         dataRef.current = response;
         setData(response);
+        setRetryStates((current) =>
+          Object.fromEntries(
+            Object.entries(current).filter(([source]) =>
+              retryProcessorRef.current?.isActive(source),
+            ),
+          ),
+        );
       } catch (err) {
         if (!active || (err instanceof DOMException && err.name === "AbortError")) return;
         setError(formatApiError(err, "Unable to load documents."));
@@ -185,6 +203,48 @@ export default function DocumentsPage() {
 
   const setControl = (update: Partial<DocumentLibraryQuery>) =>
     commitQuery({ ...update, offset: 0 });
+
+  const setStatus = (status: DocumentLibraryQuery["status"]) => {
+    dataRef.current = null;
+    setData(null);
+    setControl({ status });
+  };
+
+  const retryDocument = (document: DocumentLibraryItem) => {
+    if (!canIngestDocuments(authRef.current?.user.role) || !document.retryable) return;
+
+    if (!retryProcessorRef.current) {
+      retryProcessorRef.current = new DocumentRetryProcessor({
+        startIngest: async (source) => {
+          const nextAuth = await ensureFreshAuth(authRef.current);
+          authRef.current = nextAuth;
+          setAuth(nextAuth);
+          return (await startIngest(nextAuth.access_token, source)).job;
+        },
+        getJob: async (jobId) => {
+          const nextAuth = await ensureFreshAuth(authRef.current);
+          authRef.current = nextAuth;
+          setAuth(nextAuth);
+          return (await getIngestJob(nextAuth.access_token, jobId)).job;
+        },
+        onUpdate: (source, update) => {
+          setRetryStates((current) => ({ ...current, [source]: update }));
+        },
+        onFinished: () => setRetryKey((value) => value + 1),
+        onSubmissionError: (source, retryError) => {
+          setRetryStates((current) => ({
+            ...current,
+            [source]: {
+              status: "failed",
+              error: formatApiError(retryError, "Unable to retry document processing."),
+            },
+          }));
+        },
+      });
+    }
+
+    void retryProcessorRef.current.retry(document.filename);
+  };
 
   const clearFilters = () =>
     {
@@ -225,7 +285,9 @@ export default function DocumentsPage() {
             <div className="mt-2 flex flex-wrap items-baseline gap-x-3 gap-y-1">
               <h1 className="text-[30px] font-bold leading-9 text-primary">Documents</h1>
               <p className="text-[14px] font-semibold text-[#626b79]" aria-live="polite">
-                {data ? `${data.pagination.total.toLocaleString()} indexed documents` : "Indexed document library"}
+                {data
+                  ? `${data.pagination.total.toLocaleString()} ${query.status} documents`
+                  : `${titleCase(query.status)} document library`}
               </p>
             </div>
           </div>
@@ -260,7 +322,11 @@ export default function DocumentsPage() {
           </div>
 
           <div className="mt-3 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-            <div className="grid gap-3 sm:grid-cols-3 lg:flex lg:flex-wrap">
+            <div className="grid gap-3 sm:grid-cols-4 lg:flex lg:flex-wrap">
+              <SelectControl label="Ingestion status" value={query.status} onChange={(value) => setStatus(value as DocumentLibraryQuery["status"])}>
+                <option value="indexed">Indexed</option>
+                <option value="failed">Failed</option>
+              </SelectControl>
               <SelectControl label="File type" value={query.kind ?? ""} onChange={(value) => setControl({ kind: (value || undefined) as DocumentLibraryQuery["kind"] })}>
                 <option value="">All file types</option>
                 <option value="pdf">PDF</option>
@@ -345,11 +411,11 @@ export default function DocumentsPage() {
           {loading && !data ? (
             <DocumentSkeleton />
           ) : !data && error ? null : data?.items.length === 0 ? (
-            <EmptyState filtered={searchOrFiltersActive} onClear={clearSearchAndFilters} />
+            <EmptyState filtered={searchOrFiltersActive} onClear={clearSearchAndFilters} status={query.status} />
           ) : data ? (
             <>
-              <DocumentTable documents={data.items} />
-              <DocumentCards documents={data.items} />
+              <DocumentTable canRetry={canIngestDocuments(auth?.user.role)} documents={data.items} onRetry={retryDocument} retryStates={retryStates} />
+              <DocumentCards canRetry={canIngestDocuments(auth?.user.role)} documents={data.items} onRetry={retryDocument} retryStates={retryStates} />
             </>
           ) : null}
         </section>
@@ -403,18 +469,23 @@ function SelectControl({ children, grow = false, label, onChange, value }: {
   );
 }
 
-function DocumentTable({ documents }: { documents: DocumentLibraryItem[] }) {
+function DocumentTable({ canRetry, documents, onRetry, retryStates }: {
+  canRetry: boolean;
+  documents: DocumentLibraryItem[];
+  onRetry: (document: DocumentLibraryItem) => void;
+  retryStates: Record<string, RetryUpdate>;
+}) {
   return (
     <div className="hidden overflow-hidden rounded border border-outline-variant bg-white shadow-tonal md:block">
       <div className="overflow-x-auto">
         <table className="w-full table-fixed border-collapse text-left">
           <thead className="bg-surface-container-low text-[12px] uppercase tracking-wide text-[#626b79]">
             <tr>
-              <th className="w-[32%] px-4 py-3 font-bold" scope="col">Document</th>
-              <th className="w-[17%] px-4 py-3 font-bold" scope="col">Type</th>
-              <th className="w-[22%] px-4 py-3 font-bold" scope="col">Authority / year</th>
+              <th className="w-[28%] px-4 py-3 font-bold" scope="col">Document</th>
+              <th className="w-[15%] px-4 py-3 font-bold" scope="col">Type</th>
+              <th className="w-[20%] px-4 py-3 font-bold" scope="col">Authority / year</th>
               <th className="w-[15%] px-4 py-3 font-bold" scope="col">Size</th>
-              <th className="w-[14%] px-4 py-3 font-bold" scope="col">Indexed</th>
+              <th className="w-[22%] px-4 py-3 font-bold" scope="col">Status</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-outline-variant">
@@ -427,7 +498,7 @@ function DocumentTable({ documents }: { documents: DocumentLibraryItem[] }) {
                 <td className="px-4 py-4"><TypeCell document={document} /></td>
                 <td className="px-4 py-4"><AuthorityCell document={document} /></td>
                 <td className="px-4 py-4"><SizeCell document={document} /></td>
-                <td className="px-4 py-4 text-[13px] text-[#4e5966]">{formatIndexedDate(document.ingested_at)}</td>
+                <td className="px-4 py-4"><DocumentStatus document={document} canRetry={canRetry} onRetry={onRetry} retryState={retryStates[document.filename]} /></td>
               </tr>
             ))}
           </tbody>
@@ -437,7 +508,12 @@ function DocumentTable({ documents }: { documents: DocumentLibraryItem[] }) {
   );
 }
 
-function DocumentCards({ documents }: { documents: DocumentLibraryItem[] }) {
+function DocumentCards({ canRetry, documents, onRetry, retryStates }: {
+  canRetry: boolean;
+  documents: DocumentLibraryItem[];
+  onRetry: (document: DocumentLibraryItem) => void;
+  retryStates: Record<string, RetryUpdate>;
+}) {
   return (
     <div className="grid gap-3 md:hidden">
       {documents.map((document) => (
@@ -451,7 +527,7 @@ function DocumentCards({ documents }: { documents: DocumentLibraryItem[] }) {
           </div>
           <dl className="mt-4 grid grid-cols-2 gap-x-4 gap-y-3 border-t border-outline-variant pt-4 text-[13px]">
             <CardDetail label="Type"><TypeCell document={document} /></CardDetail>
-            <CardDetail label="Indexed">{formatIndexedDate(document.ingested_at)}</CardDetail>
+            <CardDetail label="Status"><DocumentStatus document={document} canRetry={canRetry} onRetry={onRetry} retryState={retryStates[document.filename]} /></CardDetail>
             <CardDetail label="Authority / year"><AuthorityCell document={document} /></CardDetail>
             <CardDetail label="Size"><SizeCell document={document} /></CardDetail>
           </dl>
@@ -481,11 +557,11 @@ function PageButton({ children, disabled, onClick }: { children: React.ReactNode
   return <button className="inline-flex h-11 flex-1 items-center justify-center gap-2 rounded border border-outline-variant bg-white px-4 text-[14px] font-bold text-primary hover:bg-surface-container-low disabled:cursor-not-allowed disabled:opacity-45 sm:flex-none" disabled={disabled} onClick={onClick} type="button">{children}</button>;
 }
 
-function EmptyState({ filtered, onClear }: { filtered: boolean; onClear: () => void }) {
+function EmptyState({ filtered, onClear, status }: { filtered: boolean; onClear: () => void; status: DocumentLibraryQuery["status"] }) {
   return (
     <div className="rounded border border-dashed border-outline-variant bg-white px-5 py-16 text-center">
       <span className="mx-auto grid h-12 w-12 place-items-center rounded-full bg-[#edf8f1] text-primary"><FileText className="h-5 w-5" /></span>
-      <h2 className="mt-4 text-[17px] font-bold text-[#151a18]">{filtered ? "No documents match your search and filters" : "No indexed documents yet."}</h2>
+      <h2 className="mt-4 text-[17px] font-bold text-[#151a18]">{status === "failed" ? "No failed ingestions" : filtered ? "No documents match your search and filters" : "No indexed documents yet."}</h2>
       {filtered ? <button className="mt-4 h-11 rounded border border-outline-variant bg-white px-4 text-[14px] font-bold text-primary hover:bg-surface-container-low" onClick={onClear} type="button">Clear search and filters</button> : null}
     </div>
   );

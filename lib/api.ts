@@ -207,7 +207,9 @@ export type DocumentLibraryItem = {
   authority: string | null;
   years: string[];
   chunk_count: number;
-  status: "indexed";
+  status: "indexed" | "failed";
+  ingest_error: string | null;
+  retryable: boolean;
   ingested_at: string | null;
   created_at: string | null;
   updated_at: string | null;
@@ -224,6 +226,7 @@ export type DocumentLibraryResponse = {
 };
 
 export type DocumentLibraryParams = {
+  status: "indexed" | "failed";
   search?: string;
   kind?: "pdf" | "docx" | "txt" | "ppt" | "pptx";
   document_type?: string;
@@ -558,6 +561,7 @@ export function listDocuments(
   signal?: AbortSignal,
 ) {
   const query = new URLSearchParams();
+  query.set("status", params.status);
   if (params.search?.trim()) query.set("search", params.search.trim());
   if (params.kind) query.set("kind", params.kind);
   if (params.document_type) query.set("document_type", params.document_type);

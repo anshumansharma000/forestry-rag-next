@@ -3,6 +3,7 @@ import type { DocumentLibraryItem, DocumentLibraryParams } from "./api";
 export type DocumentLibraryQuery = DocumentLibraryParams;
 
 export const DEFAULT_DOCUMENT_QUERY: DocumentLibraryQuery = {
+  status: "indexed",
   search: "",
   kind: undefined,
   document_type: undefined,
@@ -29,12 +30,14 @@ function integerParam(value: string | null, fallback: number) {
 }
 
 export function parseDocumentQuery(params: URLSearchParams): DocumentLibraryQuery {
+  const status = params.get("status");
   const kind = params.get("kind") ?? "";
   const sortBy = params.get("sort_by") ?? "";
   const sortOrder = params.get("sort_order");
   const year = params.get("year") ?? "";
 
   return {
+    status: status === "failed" ? "failed" : "indexed",
     search: params.get("search")?.trim() ?? "",
     kind: kinds.has(kind) ? (kind as DocumentLibraryQuery["kind"]) : undefined,
     document_type: params.get("document_type")?.trim() || undefined,
@@ -52,6 +55,7 @@ export function parseDocumentQuery(params: URLSearchParams): DocumentLibraryQuer
 
 export function buildDocumentQuery(query: DocumentLibraryQuery) {
   const params = new URLSearchParams();
+  params.set("status", query.status);
   if (query.search?.trim()) params.set("search", query.search.trim());
   if (query.kind) params.set("kind", query.kind);
   if (query.document_type) params.set("document_type", query.document_type);

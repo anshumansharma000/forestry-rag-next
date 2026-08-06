@@ -26,6 +26,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
+import { PasswordInput } from "../components/password-input";
 import {
   formatApiError,
   isTokenNearExpiry,
@@ -409,12 +410,11 @@ function LoginPage({
             <span className="text-[13px] font-semibold uppercase text-[#626b79]">
               Password
             </span>
-            <input
+            <PasswordInput
               autoComplete="current-password"
-              className="mt-2 h-11 w-full rounded border border-outline-variant px-3 text-[15px]"
+              className="h-11 w-full rounded border border-outline-variant px-3 text-[15px]"
               onChange={(event) => setPassword(event.target.value)}
               required
-              type="password"
               value={password}
             />
           </label>
@@ -484,12 +484,11 @@ function PasswordChangePage({
           <span className="text-[13px] font-semibold uppercase text-[#626b79]">
             Current password
           </span>
-          <input
+          <PasswordInput
             autoComplete="current-password"
-            className="mt-2 h-11 w-full rounded border border-outline-variant px-3 text-[15px]"
+            className="h-11 w-full rounded border border-outline-variant px-3 text-[15px]"
             onChange={(event) => setCurrentPassword(event.target.value)}
             required
-            type="password"
             value={currentPassword}
           />
         </label>
@@ -498,13 +497,12 @@ function PasswordChangePage({
           <span className="text-[13px] font-semibold uppercase text-[#626b79]">
             New password
           </span>
-          <input
+          <PasswordInput
             autoComplete="new-password"
-            className="mt-2 h-11 w-full rounded border border-outline-variant px-3 text-[15px]"
+            className="h-11 w-full rounded border border-outline-variant px-3 text-[15px]"
             minLength={8}
             onChange={(event) => setNewPassword(event.target.value)}
             required
-            type="password"
             value={newPassword}
           />
         </label>
@@ -513,12 +511,11 @@ function PasswordChangePage({
           <span className="text-[13px] font-semibold uppercase text-[#626b79]">
             Confirm new password
           </span>
-          <input
+          <PasswordInput
             autoComplete="new-password"
-            className="mt-2 h-11 w-full rounded border border-outline-variant px-3 text-[15px]"
+            className="h-11 w-full rounded border border-outline-variant px-3 text-[15px]"
             onChange={(event) => setConfirmPassword(event.target.value)}
             required
-            type="password"
             value={confirmPassword}
           />
         </label>
@@ -866,6 +863,7 @@ function RagAssistant({
         open={sidebarOpen}
         pending={pending.sessions}
         sessions={sessions}
+        user={user}
       />
 
       {sidebarOpen ? (
@@ -935,6 +933,7 @@ function Sidebar({
   onSelectSession,
   pending,
   sessions,
+  user,
 }: {
   activeSessionId: string | null;
   deletingSessionId: string | null;
@@ -945,6 +944,7 @@ function Sidebar({
   onSelectSession: (sessionId: string) => void;
   pending: boolean;
   sessions: ChatSession[];
+  user: AuthUser;
 }) {
   return (
     <aside
@@ -985,8 +985,12 @@ function Sidebar({
       <nav className="mt-8 px-5">
         <ul className="space-y-3">
           <SidebarLink active href="/" icon={MessageSquareText} label="Chat" />
-          <SidebarLink href="/documents" icon={Files} label="Documents" />
-          <SidebarLink href="/ingestion" icon={FileText} label="Ingestion" />
+          {canManageDocuments(user) ? (
+            <>
+              <SidebarLink href="/documents" icon={Files} label="Documents" />
+              <SidebarLink href="/ingestion" icon={FileText} label="Ingestion" />
+            </>
+          ) : null}
           <SidebarLink href="/profile" icon={UserCircle} label="Profile" />
         </ul>
       </nav>
@@ -1112,13 +1116,15 @@ function Header({
       </div>
       <div className="flex items-center gap-3 text-[#626b79] sm:gap-4">
         <StatusPill ready={configReady} />
-        <a
-          className="hidden h-10 items-center gap-2 rounded border border-outline-variant px-3 text-[14px] font-semibold text-[#26384d] hover:bg-surface-container-low sm:inline-flex"
-          href="/documents"
-        >
-          <Files className="h-4 w-4" />
-          Documents
-        </a>
+        {canManageDocuments(user) ? (
+          <a
+            className="hidden h-10 items-center gap-2 rounded border border-outline-variant px-3 text-[14px] font-semibold text-[#26384d] hover:bg-surface-container-low sm:inline-flex"
+            href="/documents"
+          >
+            <Files className="h-4 w-4" />
+            Documents
+          </a>
+        ) : null}
         {isAdminUser(user) ? (
           <a
             className="hidden h-10 items-center gap-2 rounded border border-outline-variant px-3 text-[14px] font-semibold text-[#26384d] hover:bg-surface-container-low sm:inline-flex"
@@ -1497,12 +1503,14 @@ function AssistantIntro({ user }: { user: AuthUser }) {
         sources. Answers include citations and excerpts from retrieved chunks.
       </p>
       <div className="mt-7 grid gap-3 text-left sm:grid-cols-2">
-        <HomeAction
-          href="/documents"
-          icon={Files}
-          label="Documents"
-          text="Browse the department sources available to the assistant."
-        />
+        {canManageDocuments(user) ? (
+          <HomeAction
+            href="/documents"
+            icon={Files}
+            label="Documents"
+            text="Browse the department sources available to the assistant."
+          />
+        ) : null}
         <HomeAction
           href="/profile"
           icon={UserCircle}

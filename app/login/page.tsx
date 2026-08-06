@@ -2,6 +2,7 @@
 
 import { AlertCircle, Loader2, ShieldCheck } from "lucide-react";
 import { FormEvent, useEffect, useState } from "react";
+import { PasswordInput } from "../../components/password-input";
 import { API_BASE_URL, login, readStoredAuth, storeAuth } from "../../lib/api";
 
 function formatError(err: unknown) {
@@ -90,12 +91,11 @@ export default function LoginRoute() {
             <span className="text-[13px] font-semibold uppercase text-[#626b79]">
               Password
             </span>
-            <input
+            <PasswordInput
               autoComplete="current-password"
-              className="mt-2 h-11 w-full rounded border border-outline-variant px-3 text-[15px]"
+              className="h-11 w-full rounded border border-outline-variant px-3 text-[15px]"
               onChange={(event) => setPassword(event.target.value)}
               required
-              type="password"
               value={password}
             />
           </label>

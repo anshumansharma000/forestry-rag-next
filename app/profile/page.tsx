@@ -11,6 +11,7 @@ import {
   UserCircle,
 } from "lucide-react";
 import { FormEvent, useEffect, useState } from "react";
+import { PasswordInput } from "../../components/password-input";
 import {
   ensureFreshAuth,
   formatApiError,
@@ -299,14 +300,24 @@ function TextField({
       <span className="text-[13px] font-semibold uppercase text-[#626b79]">
         {label}
       </span>
-      <input
-        autoComplete={autoComplete}
-        className="mt-2 h-11 w-full rounded border border-outline-variant px-3 text-[15px]"
-        onChange={(event) => onChange(event.target.value)}
-        required={required}
-        type={type}
-        value={value}
-      />
+      {type === "password" ? (
+        <PasswordInput
+          autoComplete={autoComplete}
+          className="h-11 w-full rounded border border-outline-variant px-3 text-[15px]"
+          onChange={(event) => onChange(event.target.value)}
+          required={required}
+          value={value}
+        />
+      ) : (
+        <input
+          autoComplete={autoComplete}
+          className="mt-2 h-11 w-full rounded border border-outline-variant px-3 text-[15px]"
+          onChange={(event) => onChange(event.target.value)}
+          required={required}
+          type={type}
+          value={value}
+        />
+      )}
     </label>
   );
 }

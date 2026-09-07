@@ -6,6 +6,7 @@ import {
   ChevronDown,
   Copy,
   Database,
+  FlaskConical,
   FileText,
   Files,
   KeyRound,
@@ -991,6 +992,9 @@ function Sidebar({
               <SidebarLink href="/ingestion" icon={FileText} label="Ingestion" />
             </>
           ) : null}
+          {isAdminUser(user) ? (
+            <SidebarLink href="/admin/rag-lab" icon={FlaskConical} label="RAG Lab" />
+          ) : null}
           <SidebarLink href="/profile" icon={UserCircle} label="Profile" />
         </ul>
       </nav>
@@ -1123,6 +1127,15 @@ function Header({
           >
             <Files className="h-4 w-4" />
             Documents
+          </a>
+        ) : null}
+        {isAdminUser(user) ? (
+          <a
+            className="hidden h-10 items-center gap-2 rounded border border-outline-variant px-3 text-[14px] font-semibold text-[#26384d] hover:bg-surface-container-low sm:inline-flex"
+            href="/admin/rag-lab"
+          >
+            <FlaskConical className="h-4 w-4" />
+            RAG Lab
           </a>
         ) : null}
         {isAdminUser(user) ? (
@@ -1509,6 +1522,14 @@ function AssistantIntro({ user }: { user: AuthUser }) {
             icon={Files}
             label="Documents"
             text="Browse the department sources available to the assistant."
+          />
+        ) : null}
+        {isAdminUser(user) ? (
+          <HomeAction
+            href="/admin/rag-lab"
+            icon={FlaskConical}
+            label="RAG Lab"
+            text="Tune and test private retrieval revisions before publication."
           />
         ) : null}
         <HomeAction

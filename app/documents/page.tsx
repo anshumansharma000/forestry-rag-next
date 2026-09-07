@@ -2,7 +2,6 @@
 
 import {
   AlertCircle,
-  ArrowLeft,
   ChevronLeft,
   ChevronRight,
   FileText,
@@ -13,6 +12,7 @@ import {
   X,
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { SidebarPageShell } from "../../components/app-sidebar";
 import { ensureFreshAuth, formatApiError, loadStoredSession } from "../../lib/auth-client";
 import {
   AuthState,
@@ -274,15 +274,12 @@ export default function DocumentsPage() {
   );
 
   return (
+    <SidebarPageShell activePath="/documents" user={auth?.user ?? null}>
     <main className="min-h-screen bg-surface px-4 py-5 text-on-surface sm:px-8 sm:py-7">
       <div className="mx-auto max-w-7xl">
         <header className="flex flex-col justify-between gap-4 border-b border-outline-variant pb-6 sm:flex-row sm:items-end">
           <div>
-            <a className="inline-flex min-h-11 items-center gap-2 text-[14px] font-semibold text-[#4e5966] hover:text-primary" href="/">
-              <ArrowLeft className="h-4 w-4" />
-              Back to chat
-            </a>
-            <div className="mt-2 flex flex-wrap items-baseline gap-x-3 gap-y-1">
+            <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
               <h1 className="text-[30px] font-bold leading-9 text-primary">Documents</h1>
               <p className="text-[14px] font-semibold text-[#626b79]" aria-live="polite">
                 {data
@@ -449,6 +446,7 @@ export default function DocumentsPage() {
         ) : null}
       </div>
     </main>
+    </SidebarPageShell>
   );
 }
 

@@ -2,7 +2,6 @@
 
 import {
   AlertCircle,
-  ArrowLeft,
   CheckCircle2,
   KeyRound,
   Loader2,
@@ -12,6 +11,7 @@ import {
 } from "lucide-react";
 import { FormEvent, useEffect, useState } from "react";
 import { PasswordInput } from "../../components/password-input";
+import { SidebarPageShell } from "../../components/app-sidebar";
 import {
   ensureFreshAuth,
   formatApiError,
@@ -144,18 +144,12 @@ export default function ProfilePage() {
   }
 
   return (
+    <SidebarPageShell activePath="/profile" user={user}>
     <main className="min-h-screen bg-surface px-5 py-6 text-on-surface sm:px-8">
       <div className="mx-auto max-w-5xl">
         <header className="flex flex-col justify-between gap-4 border-b border-outline-variant pb-6 sm:flex-row sm:items-end">
           <div>
-            <a
-              className="inline-flex items-center gap-2 text-[14px] font-semibold text-[#4e5966] hover:text-primary"
-              href="/"
-            >
-              <ArrowLeft className="h-4 w-4" />
-              Back to chat
-            </a>
-            <h1 className="mt-3 text-[30px] font-bold leading-9 text-primary">
+            <h1 className="text-[30px] font-bold leading-9 text-primary">
               User Profile
             </h1>
             <p className="mt-2 text-[14px] text-[#626b79]">
@@ -281,6 +275,7 @@ export default function ProfilePage() {
         )}
       </div>
     </main>
+    </SidebarPageShell>
   );
 }
 

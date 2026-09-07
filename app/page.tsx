@@ -6,14 +6,10 @@ import {
   ChevronDown,
   Copy,
   Database,
-  FlaskConical,
-  Files,
   KeyRound,
   Loader2,
   LogOut,
   Menu,
-  MessageSquareText,
-  Plus,
   RefreshCw,
   Search,
   Send,
@@ -21,13 +17,12 @@ import {
   ShieldCheck,
   Trash2,
   Upload,
-  UserCircle,
-  Users,
   X,
   type LucideIcon,
 } from "lucide-react";
 import { Fragment, FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import { PasswordInput } from "../components/password-input";
+import { AppSidebar } from "../components/app-sidebar";
 import { SourceDrawer } from "../components/source-drawer";
 import {
   formatApiError,
@@ -877,11 +872,10 @@ function RagAssistant({
 
   return (
     <>
-      <Sidebar
-        activeSessionId={activeSessionId}
-        deletingSessionId={deletingSessionId}
-        onClose={() => setSidebarOpen(false)}
-        onDeleteSession={(sessionId) => void removeSession(sessionId)}
+      <AppSidebar
+        activePath="/"
+        mobileOpen={sidebarOpen}
+        onMobileOpenChange={setSidebarOpen}
         onNewChat={() => {
           setActiveSessionId(null);
           setMessages([]);
@@ -889,28 +883,24 @@ function RagAssistant({
           writeChatIdToUrl(null);
           setSidebarOpen(false);
         }}
-        onSelectSession={(sessionId) => {
-          setActiveSessionId(sessionId);
-          setSearchQuery(null);
-          writeChatIdToUrl(sessionId);
-          setSidebarOpen(false);
-        }}
-        open={sidebarOpen}
-        pending={pending.sessions}
-        sessions={sessions}
         user={user}
-      />
-
-      {sidebarOpen ? (
-        <button
-          aria-label="Close navigation overlay"
-          className="fixed inset-0 z-30 bg-on-surface/25 lg:hidden"
-          onClick={() => setSidebarOpen(false)}
-          type="button"
+      >
+        <ChatHistory
+          activeSessionId={activeSessionId}
+          deletingSessionId={deletingSessionId}
+          onDeleteSession={(sessionId) => void removeSession(sessionId)}
+          onSelectSession={(sessionId) => {
+            setActiveSessionId(sessionId);
+            setSearchQuery(null);
+            writeChatIdToUrl(sessionId);
+            setSidebarOpen(false);
+          }}
+          pending={pending.sessions}
+          sessions={sessions}
         />
-      ) : null}
+      </AppSidebar>
 
-      <section className="min-h-screen lg:pl-[360px]">
+      <section className="min-h-screen transition-[padding] duration-200 lg:pl-[var(--app-sidebar-width)]">
         <Header
           configReady={configReady}
           onAdminClick={() => setAdminOpen(!adminOpen)}
@@ -960,85 +950,23 @@ function RagAssistant({
   );
 }
 
-function Sidebar({
+function ChatHistory({
   activeSessionId,
   deletingSessionId,
-  open,
-  onClose,
   onDeleteSession,
-  onNewChat,
   onSelectSession,
   pending,
   sessions,
-  user,
 }: {
   activeSessionId: string | null;
   deletingSessionId: string | null;
-  open: boolean;
-  onClose: () => void;
   onDeleteSession: (sessionId: string) => void;
-  onNewChat: () => void;
   onSelectSession: (sessionId: string) => void;
   pending: boolean;
   sessions: ChatSession[];
-  user: AuthUser;
 }) {
   return (
-    <aside
-      className={`fixed inset-y-0 left-0 z-40 flex w-[320px] max-w-[86vw] flex-col overflow-y-auto border-r border-outline-variant/60 bg-white transition-transform duration-200 lg:w-[360px] lg:translate-x-0 ${
-        open ? "translate-x-0" : "-translate-x-full"
-      }`}
-    >
-      <div className="flex items-start justify-between px-7 pb-7 pt-8">
-        <div>
-          <a className="block text-[26px] font-bold leading-8 text-primary hover:text-primary-container" href="/" onClick={onClose}>
-            Aranyabodh
-          </a>
-          <p className="mt-2 text-[14px] font-medium uppercase leading-4 text-[#626b79]">
-            Forestry knowledge assistant
-          </p>
-        </div>
-        <button
-          aria-label="Close sidebar"
-          className="mt-1 grid h-10 w-10 place-items-center rounded border border-outline-variant text-[#5f6875] lg:hidden"
-          onClick={onClose}
-          type="button"
-        >
-          <X className="h-5 w-5" strokeWidth={2.2} />
-        </button>
-      </div>
-
-      <div className="px-5">
-        <button
-          className="flex h-[56px] w-full items-center justify-center gap-3 rounded bg-primary text-[18px] font-medium text-white transition hover:bg-primary-container"
-          onClick={onNewChat}
-          type="button"
-        >
-          <Plus className="h-6 w-6" strokeWidth={2.5} />
-          New Chat
-        </button>
-      </div>
-
-      <nav aria-label="Primary navigation" className="mt-6 px-5">
-        <ul className="space-y-1">
-          <SidebarLink active href="/" icon={MessageSquareText} label="Chat" />
-          {canManageDocuments(user) ? (
-            <>
-              <SidebarLink href="/documents" icon={Files} label="Documents" />
-              <SidebarLink href="/ingestion" icon={Database} label="Document processing" />
-            </>
-          ) : null}
-          {isAdminUser(user) ? (
-            <>
-              <SidebarLink href="/admin/rag-lab" icon={FlaskConical} label="Knowledge Lab" />
-              <SidebarLink href="/admin/users" icon={Users} label="Users" />
-            </>
-          ) : null}
-          <SidebarLink href="/profile" icon={UserCircle} label="Profile" />
-        </ul>
-      </nav>
-
-      <section className="mt-7 flex min-h-0 flex-1 flex-col px-7 pb-8">
+      <section className="mt-7 flex min-h-0 flex-1 flex-col px-7 pb-4">
         <div className="flex items-center justify-between">
           <p className="text-[14px] font-semibold uppercase leading-5 text-[#7b8492]">
             Recent chats
@@ -1097,36 +1025,6 @@ function Sidebar({
           })}
         </div>
       </section>
-    </aside>
-  );
-}
-
-function SidebarLink({
-  active = false,
-  href,
-  icon: Icon,
-  label,
-}: {
-  active?: boolean;
-  href: string;
-  icon: LucideIcon;
-  label: string;
-}) {
-  return (
-    <li>
-      <a
-        aria-current={active ? "page" : undefined}
-        className={`flex min-h-12 items-center gap-4 rounded px-4 py-3 text-[16px] font-medium transition ${
-          active
-            ? "bg-[#e8f8ef] text-primary"
-            : "text-[#26384d] hover:bg-surface-container-low"
-        }`}
-        href={href}
-      >
-        <Icon className="h-5 w-5 shrink-0" strokeWidth={2.1} />
-        {label}
-      </a>
-    </li>
   );
 }
 
@@ -2040,7 +1938,7 @@ function ChatInput({
   }
 
   return (
-    <div className="fixed bottom-0 left-0 right-0 z-20 border-t border-transparent bg-surface/95 px-4 pb-3 pt-2 sm:px-6 lg:left-[360px]">
+    <div className="fixed bottom-0 left-0 right-0 z-20 border-t border-transparent bg-surface/95 px-4 pb-3 pt-2 transition-[left] duration-200 sm:px-6 lg:left-[var(--app-sidebar-width)]">
       <div className="mx-auto max-w-[1120px]">
         <form
           className="flex min-h-[72px] items-center gap-3 rounded-lg border border-[#d9dee4] bg-white px-4 py-2.5 shadow-tonal sm:gap-4 sm:px-5"

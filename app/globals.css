@@ -3,6 +3,7 @@
 @tailwind utilities;
 
 :root {
+  --app-sidebar-width: 360px;
   color: #191c1d;
   background: #f8f9fa;
 }

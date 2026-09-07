@@ -15,7 +15,14 @@ export function DocumentStatus({ canRetry, document, onRetry, retryState }: {
   const error = retryState?.error ?? document.ingest_error;
 
   if (status === "indexed" || status === "succeeded") {
-    return <span className="text-[13px] text-[#4e5966]">{formatIndexedDate(document.ingested_at)}</span>;
+    return (
+      <span className="text-[13px] text-[#4e5966]">
+        <span className="block font-bold text-primary">
+          {document.chunk_count > 0 ? "Ready for chat" : "Needs review"}
+        </span>
+        <span className="mt-1 block text-[12px]">Processed {formatIndexedDate(document.ingested_at)}</span>
+      </span>
+    );
   }
 
   if (processing) {

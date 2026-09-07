@@ -24,7 +24,6 @@ import {
   loadStoredSession,
 } from "../../lib/auth-client";
 import {
-  API_BASE_URL,
   ApiError,
   AuthState,
   AuthUser,
@@ -63,7 +62,7 @@ function canManageDocuments(user: AuthUser | null) {
 
 function pageRange(source: PreviewChunk) {
   if (source.page_start == null && source.page_end == null) {
-    return "No page";
+    return "Page number unavailable";
   }
   if (source.page_start == null) {
     return `Page ${source.page_end}`;
@@ -76,7 +75,7 @@ function pageRange(source: PreviewChunk) {
 
 function previewRange(preview: ChunkPreview | null) {
   if (!preview || preview.chunks_returned === 0) {
-    return "No chunks returned";
+    return "No excerpts found";
   }
 
   const start = preview.offset + 1;
@@ -189,13 +188,13 @@ function formatDuration(totalSeconds: number) {
 function activityMessage(filename: string, job: IngestJob) {
   switch (job.status) {
     case "queued":
-      return `${filename} is queued for ingestion.`;
+      return `${filename} is waiting to be processed.`;
     case "running":
-      return `${filename} ingestion is now processing.`;
+      return `${filename} is being prepared for search.`;
     case "succeeded":
-      return `${filename} was indexed successfully.`;
+      return `${filename} is ready for chat.`;
     case "failed":
-      return `${filename} failed: ${job.error || "Ingestion failed."}`;
+      return `${filename} could not be processed: ${job.error || "Document processing failed."}`;
   }
 }
 
@@ -210,7 +209,7 @@ function flowActivityMessage(filename: string, status: DocumentFlowStatus) {
     case "finalizing":
       return `${filename} uploaded; finalizing storage.`;
     case "queued":
-      return `${filename} is queued for ingestion.`;
+      return `${filename} is waiting to be processed.`;
     case "failed":
       return `${filename} could not continue.`;
   }
@@ -318,7 +317,7 @@ export default function IngestionPage() {
     if (!source && !includeAllSources) {
       return {
         ok: false,
-        error: "Select or upload a document before loading chunk preview.",
+        error: "Select or upload a document before loading searchable excerpts.",
       };
     }
 
@@ -358,9 +357,9 @@ export default function IngestionPage() {
       const message =
         err instanceof ApiError ? err.message.toLowerCase() : "";
       if (message.includes("source") && message.includes("required")) {
-        setError("Select or upload a document before loading chunk preview.");
+        setError("Select or upload a document before loading searchable excerpts.");
       } else {
-        setError(formatApiError(err, "Unable to load chunk preview."));
+        setError(formatApiError(err, "Unable to load searchable excerpts."));
       }
     } finally {
       setPreviewing(false);
@@ -389,7 +388,7 @@ export default function IngestionPage() {
         setUser(session.user);
       } catch (err) {
         if (!cancelled) {
-          setError(formatApiError(err, "Unable to load ingestion page."));
+          setError(formatApiError(err, "Unable to load document processing."));
         }
       } finally {
         if (!cancelled) {
@@ -453,7 +452,7 @@ export default function IngestionPage() {
                       : job.status === "succeeded"
                         ? "indexed"
                         : job.status,
-                  detail: job.status === "failed" ? job.error || "Ingestion failed." : undefined,
+                  detail: job.status === "failed" ? job.error || "Document processing failed." : undefined,
                   chunks: job.status === "succeeded" ? job.result?.chunks_added ?? job.result?.chunks : undefined,
                   failureStage: job.status === "failed" ? "ingestion" : undefined,
                   jobProgress: jobProgress(job),
@@ -491,7 +490,7 @@ export default function IngestionPage() {
       (filename, jobId, pollingError) => {
         const message = formatApiError(
           pollingError,
-          "Unable to refresh ingestion status.",
+          "Unable to refresh processing status.",
         );
         setUploadRows((rows) =>
           rows.map((row) =>
@@ -676,7 +675,7 @@ export default function IngestionPage() {
           if (update.status === "failed") {
             addActivityUpdate({
               id: `${key}:failed:${update.failureStage}`,
-              message: `${filename}: ${update.detail || "The ingestion flow failed."}`,
+              message: `${filename}: ${update.detail || "Document processing failed."}`,
               tone: "error",
               createdAt: new Date().toISOString(),
             });
@@ -688,7 +687,7 @@ export default function IngestionPage() {
         errorMessage: formatApiError,
       });
 
-      setNotice("Each finalized document has been sent to its own ingestion job.");
+      setNotice("Your documents were uploaded and are now being prepared for search.");
       setSelectedFiles([]);
       if (fileInputRef.current) {
         fileInputRef.current.value = "";
@@ -715,7 +714,7 @@ export default function IngestionPage() {
     } catch (err) {
       updateUploadRow(row.key, {
         status: "failed",
-        detail: formatApiError(err, "Unable to retry document ingestion."),
+        detail: formatApiError(err, "Unable to retry document processing."),
         failureStage: "ingestion",
       });
     }
@@ -798,11 +797,11 @@ export default function IngestionPage() {
               Back to chat
             </a>
             <h1 className="mt-3 text-[30px] font-bold leading-9 text-primary">
-              Upload & Ingestion
+              Upload documents
             </h1>
             <p className="mt-2 text-[14px] text-[#626b79]">
-              Upload PDF, DOCX, TXT, PPT, or PPTX sources, run indexing, and
-              inspect the chunks that are available to the assistant.
+              Upload department sources, track automatic processing, and inspect
+              the searchable excerpts available to the assistant.
             </p>
           </div>
           <div className="inline-flex w-fit items-center gap-2 rounded border border-[#b7d6c4] bg-[#edf8f1] px-3 py-2 text-[13px] font-semibold text-primary">
@@ -818,14 +817,14 @@ export default function IngestionPage() {
           <div className="mt-6 flex items-center gap-3 rounded border border-outline-variant bg-white px-4 py-4 shadow-tonal">
             <Loader2 className="h-5 w-5 animate-spin text-primary" />
             <span className="text-[15px] font-semibold">
-              Loading ingestion tools
+              Loading document processing
             </span>
           </div>
         ) : !canManage ? (
           <section className="mt-6 rounded border border-[#f0c4b6] bg-[#fff5f1] p-5 text-[#743f2c]">
             <h2 className="text-[18px] font-bold">Access required</h2>
             <p className="mt-2 text-[14px] leading-5">
-              Upload and ingestion require the admin or knowledge_manager role.
+              Uploading documents requires an Admin or Knowledge manager role.
             </p>
           </section>
         ) : (
@@ -839,9 +838,7 @@ export default function IngestionPage() {
                   <h2 className="text-[19px] font-bold text-[#151a18]">
                     Source Files
                   </h2>
-                  <p className="text-[14px] text-[#626b79]">
-                    {API_BASE_URL}
-                  </p>
+                  <p className="text-[14px] text-[#626b79]">Document processing</p>
                 </div>
               </div>
 
@@ -852,12 +849,12 @@ export default function IngestionPage() {
                 <div className="flex items-center justify-between gap-3">
                   <p className="inline-flex items-center gap-2 text-[13px] font-bold text-[#26384d]">
                     <Bell className="h-4 w-4 text-primary" />
-                    Admin updates
+                    Processing updates
                   </p>
                   <span className="rounded-full bg-[#e5eee9] px-2 py-0.5 text-[11px] font-semibold text-primary">
                     {activeJobCount
                       ? `${activeJobCount} active`
-                      : "No active jobs"}
+                      : "No documents processing"}
                   </span>
                 </div>
                 {activityUpdates.length ? (
@@ -885,8 +882,8 @@ export default function IngestionPage() {
                   </ul>
                 ) : (
                   <p className="mt-2 text-[12px] leading-4 text-[#626b79]">
-                    Upload a document to see preparation, ingestion, and error
-                    updates here.
+                    Upload a document to follow its progress and see any issues
+                    here.
                   </p>
                 )}
               </div>
@@ -963,10 +960,10 @@ export default function IngestionPage() {
                               <div className="flex items-center justify-between gap-2 text-[11px] font-semibold text-[#626b79]">
                                 <span>
                                   {file.status === "queued"
-                                    ? "Waiting for a worker"
+                                    ? "Waiting to be processed"
                                     : file.jobProgress == null
-                                      ? "Indexing in progress"
-                                      : `${file.jobProgress}% indexed`}
+                                      ? "Preparing for search"
+                                      : `${file.jobProgress}% processed`}
                                 </span>
                                 <span>
                                   {file.etaSeconds != null
@@ -981,7 +978,7 @@ export default function IngestionPage() {
                                 </span>
                               </div>
                               <div
-                                aria-label={`${file.filename} ingestion progress`}
+                                aria-label={`${file.filename} processing progress`}
                                 aria-valuemax={100}
                                 aria-valuemin={0}
                                 aria-valuenow={file.jobProgress}
@@ -1010,7 +1007,7 @@ export default function IngestionPage() {
                           ) : null}
                           {file.status === "indexed" ? (
                             <p className="text-[12px] text-primary">
-                              {file.chunks ?? 0} chunks indexed
+                              {file.chunks ?? 0} searchable excerpts added
                             </p>
                           ) : null}
                           {file.detail ? (
@@ -1038,7 +1035,7 @@ export default function IngestionPage() {
                                 type="button"
                               >
                                 <RefreshCw className="h-3 w-3" />
-                                Retry ingestion
+                                Retry processing
                               </button>
                             )
                           ) : null}
@@ -1058,11 +1055,11 @@ export default function IngestionPage() {
                   ) : (
                     <Upload className="h-4 w-4" />
                   )}
-                  {uploading ? "Uploading..." : "Upload selected"}
+                  {uploading ? "Uploading…" : "Upload and process"}
                 </button>
                 <button
                   className="inline-flex h-11 items-center justify-center gap-2 rounded border border-outline-variant bg-white px-4 text-[14px] font-semibold text-[#26384d] transition hover:bg-surface-container-low disabled:cursor-not-allowed disabled:opacity-60"
-                  disabled={previewing || uploading}
+                  disabled={previewing || uploading || !hasPreviewScope}
                   onClick={() => void loadPreview()}
                   type="button"
                 >
@@ -1071,25 +1068,27 @@ export default function IngestionPage() {
                   ) : (
                     <RefreshCw className="h-4 w-4" />
                   )}
-                  Refresh preview
+                  Reload excerpts
                 </button>
               </div>
 
+              {preview ? (
               <div className="mt-5 grid gap-3 text-[13px] leading-5 text-[#4e5966] sm:grid-cols-2">
-                <Metric label="Documents" value={preview?.documents ?? "n/a"} />
+                <Metric label="Documents" value={preview.documents} />
                 <Metric
                   label="Processed"
-                  value={preview?.documents_processed ?? "n/a"}
+                  value={preview.documents_processed}
                 />
                 <Metric
-                  label="Chunks seen"
-                  value={preview?.chunks_seen ?? "n/a"}
+                  label="Excerpts found"
+                  value={preview.chunks_seen}
                 />
                 <Metric
-                  label="Page rows"
-                  value={preview?.chunks_returned ?? "n/a"}
+                  label="Shown"
+                  value={preview.chunks_returned}
                 />
               </div>
+              ) : null}
 
             </div>
 
@@ -1100,10 +1099,10 @@ export default function IngestionPage() {
                 </span>
                 <div>
                   <h2 className="text-[19px] font-bold text-[#151a18]">
-                    Chunk Preview
+                    Searchable excerpts
                   </h2>
                   <p className="text-[14px] text-[#626b79]">
-                    First indexed chunks available to retrieval
+                    Inspect the excerpts available to answers
                   </p>
                 </div>
               </div>
@@ -1140,7 +1139,7 @@ export default function IngestionPage() {
                 {allSources ? (
                   <div className="flex items-start gap-2 rounded border border-[#f0d8a8] bg-[#fff8e8] px-3 py-2 text-[13px] leading-5 text-[#6b4b13]">
                     <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
-                    <span>Corpus-wide preview can be slower.</span>
+                    <span>Looking across all documents can take longer.</span>
                   </div>
                 ) : null}
 
@@ -1183,7 +1182,7 @@ export default function IngestionPage() {
 
                   <button
                     className="inline-flex h-10 items-center justify-center gap-2 rounded bg-primary px-4 text-[14px] font-semibold text-white transition hover:bg-primary-container disabled:cursor-not-allowed disabled:opacity-60"
-                    disabled={previewing}
+                    disabled={previewing || !hasPreviewScope}
                     type="submit"
                   >
                     {previewing ? (
@@ -1191,7 +1190,7 @@ export default function IngestionPage() {
                     ) : (
                       <RefreshCw className="h-4 w-4" />
                     )}
-                    Apply
+                    Load excerpts
                   </button>
                 </div>
               </form>
@@ -1246,13 +1245,15 @@ export default function IngestionPage() {
                   <div className="flex items-center gap-3 rounded border border-outline-variant bg-surface-container-lowest p-4 text-[#626b79]">
                     <Loader2 className="h-5 w-5 animate-spin text-primary" />
                     <span className="text-[14px] font-semibold">
-                      Loading chunks
+                      Loading excerpts
                     </span>
                   </div>
                 ) : null}
                 {!previewing && !preview?.chunks.length ? (
                   <p className="rounded border border-dashed border-outline-variant p-4 text-[14px] leading-5 text-[#626b79]">
-                    No chunks available yet. Upload documents and run ingest.
+                    {hasPreviewScope
+                      ? "No searchable excerpts match this selection."
+                      : "Choose a source file or select All documents to load searchable excerpts."}
                   </p>
                 ) : null}
                 {preview?.chunks.map((chunk) => (
@@ -1267,7 +1268,7 @@ export default function IngestionPage() {
                           {chunk.source}
                         </p>
                         <p className="mt-1 text-[12px] font-semibold uppercase text-[#7b8492]">
-                          {pageRange(chunk)} · Chunk {chunk.chunk_index} ·{" "}
+                          {pageRange(chunk)} · Excerpt {chunk.chunk_index + 1} ·{" "}
                           {chunk.chunk_type}
                         </p>
                       </div>

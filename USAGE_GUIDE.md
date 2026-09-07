@@ -14,7 +14,7 @@ The app uses role-based access. Your role controls which pages and actions are a
 | --- | --- |
 | `viewer` | Sign in, use chat, view sources, manage own profile and password. |
 | `officer` | Same app access as viewer, intended for operational users. |
-| `knowledge_manager` | User access plus document upload, ingestion, and chunk preview. |
+| `knowledge_manager` | User access plus document upload, processing, and excerpt preview. Shown as **Knowledge manager** in the interface. |
 | `admin` | Full access, including user management and document ingestion. |
 
 If you cannot see a page or action, your role probably does not allow it. Contact an admin if your access needs to change.
@@ -74,9 +74,9 @@ Examples:
 - Summarize the rules for habitat restoration approvals.
 - Which source explains enforcement responsibilities?
 
-### Top K Search Setting
+### Source Excerpts Setting
 
-The **Top K** value controls how many relevant source chunks the assistant asks the backend to retrieve for a response.
+The **Sources** value controls how many relevant source excerpts the assistant retrieves for a response.
 
 - Use a lower value such as `3` for focused answers.
 - Use a higher value such as `8` or `10` when asking broad questions.
@@ -133,13 +133,13 @@ Your email and role are shown for reference and cannot be changed from the profi
 
 The new password must follow the password rules listed in section 3. The new password must also be different from the current password.
 
-## 6. Document Upload and Ingestion
+## 6. Document Upload and Processing
 
 URL: https://forestry-rag-next.pages.dev/ingestion
 
 This section applies to `admin` and `knowledge_manager` users.
 
-The ingestion page lets authorized users upload documents, run indexing, and preview searchable chunks.
+The document processing page lets authorized users upload documents, track automatic indexing, and preview searchable excerpts.
 
 ### Supported File Types
 
@@ -153,26 +153,19 @@ Other file types are rejected.
 
 ### Upload a Document
 
-1. Open **Ingestion** or **Upload & Ingest**.
+1. Open **Upload documents**.
 2. Select **Upload document**.
 3. Choose a supported file.
-4. Wait for the upload confirmation.
+4. Select **Upload and process**.
+5. Wait while each document is prepared, uploaded, and processed automatically.
 
-Uploading a file does not automatically make it searchable. You must run ingest after uploading.
+When processing succeeds, the app reports that the document is ready and shows the searchable excerpt count. Failed documents include a retry action when retrying is supported.
 
-### Run Ingest
+### Load Searchable Excerpts
 
-1. After uploading one or more documents, select **Run ingest**.
-2. Wait while the job is queued or running.
-3. Review the final status message.
+Choose a source file, or select **All documents**, then select **Load excerpts**. The preview shows searchable excerpts including document name, page range, excerpt number, and content when requested.
 
-When ingest succeeds, the app reports how many documents were indexed, how many were skipped because they already existed, and how many chunks were added.
-
-### Refresh Chunk Preview
-
-Select **Refresh preview** to reload the chunk preview list. The preview shows the first indexed chunks available to retrieval, including document name, page range, chunk number, and excerpt text.
-
-If no chunks appear, upload documents and run ingest first.
+If no excerpts appear, confirm that a source is selected and that processing completed successfully.
 
 ## 7. Admin User Management
 
@@ -263,7 +256,7 @@ Your account requires a password update before use. Enter the current password y
 
 ### I cannot open ingestion
 
-Only `admin` and `knowledge_manager` users can upload or ingest documents. Ask an admin to update your role if needed.
+Only Admin and Knowledge manager users can upload and process documents. Ask an admin to update your role if needed.
 
 ### I cannot open user management
 
@@ -271,11 +264,11 @@ Only `admin` users can manage accounts.
 
 ### The assistant gives weak or missing answers
 
-Try a more specific question, increase **Top K**, or ask a knowledge manager/admin to confirm that relevant documents were uploaded and ingested.
+Try a more specific question, increase **Sources**, or ask a knowledge manager/admin to confirm that relevant documents were uploaded and processed.
 
 ### Uploaded documents do not appear in answers
 
-Run ingest after upload, then refresh the chunk preview. If chunks still do not appear, check the ingest status message for skipped documents or errors.
+Check the document processing status, then reload the searchable excerpts. If excerpts still do not appear, review the processing error or retry the document.
 
 ### The app shows setup needed
 

@@ -7,7 +7,6 @@ import {
   Copy,
   Database,
   FlaskConical,
-  FileText,
   Files,
   KeyRound,
   Loader2,
@@ -23,11 +22,13 @@ import {
   Trash2,
   Upload,
   UserCircle,
+  Users,
   X,
   type LucideIcon,
 } from "lucide-react";
-import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
+import { Fragment, FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import { PasswordInput } from "../components/password-input";
+import { SourceDrawer } from "../components/source-drawer";
 import {
   formatApiError,
   isTokenNearExpiry,
@@ -48,6 +49,7 @@ import {
   createSession,
   deleteMessage,
   deleteSession,
+  downloadSourceDocument,
   getConfigStatus,
   getCurrentUser,
   getHealth,
@@ -109,7 +111,7 @@ function formatWhen(value?: string | null) {
 
 function pageRange(source: Source) {
   if (source.page_start == null && source.page_end == null) {
-    return "No page";
+    return "Page number unavailable";
   }
   if (source.page_start === source.page_end || source.page_end == null) {
     return `Page ${source.page_start}`;
@@ -336,7 +338,7 @@ function LoadingScreen() {
     <main className="grid min-h-screen place-items-center bg-surface text-on-surface">
       <div className="flex items-center gap-3 rounded border border-outline-variant bg-white px-5 py-4 shadow-tonal">
         <Loader2 className="h-5 w-5 animate-spin text-primary" />
-        <span className="text-[15px] font-semibold">Loading session</span>
+        <span className="text-[15px] font-semibold">Opening your chat</span>
       </div>
     </main>
   );
@@ -370,8 +372,8 @@ function LoginPage({
             Aranyabodh
           </h1>
           <p className="mt-5 max-w-xl text-[18px] leading-7 text-white/78">
-            Query indexed department documents, preserve cited source context,
-            and manage pilot access through role-based accounts.
+            Find reliable answers in department documents and open the source
+            behind every response.
           </p>
         </div>
       </section>
@@ -387,7 +389,9 @@ function LoginPage({
             </span>
             <div>
               <h2 className="text-[24px] font-bold text-primary">Sign in</h2>
-              <p className="text-[14px] text-[#626b79]">{API_BASE_URL}</p>
+              <p className="text-[14px] text-[#626b79]">
+                Sign in with your department account
+              </p>
             </div>
           </div>
 
@@ -428,6 +432,9 @@ function LoginPage({
             {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
             Sign in
           </button>
+          <p className="mt-4 text-center text-[13px] leading-5 text-[#626b79]">
+            Contact your administrator if you cannot sign in or need your password reset.
+          </p>
         </form>
       </section>
     </main>
@@ -561,6 +568,7 @@ function RagAssistant({
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [adminOpen, setAdminOpen] = useState(false);
   const [selectedSource, setSelectedSource] = useState<Source | null>(null);
+  const [downloadingSource, setDownloadingSource] = useState(false);
   const [config, setConfig] = useState<ConfigStatus | null>(null);
   const [health, setHealth] = useState<string>("unknown");
   const [sessions, setSessions] = useState<ChatSession[]>([]);
@@ -641,7 +649,7 @@ function RagAssistant({
         return current;
       });
     } catch (err) {
-      handleError(err, "Unable to load sessions.");
+      handleError(err, "Unable to load recent chats.");
     } finally {
       setPendingKey("sessions", false);
     }
@@ -705,7 +713,7 @@ function RagAssistant({
   async function sendMessage(rawMessage: string) {
     const message = rawMessage.trim();
     if (!message || pending.send) {
-      return;
+      return false;
     }
 
     setError(null);
@@ -731,7 +739,7 @@ function RagAssistant({
           ? await createChatSession(message.slice(0, 80))
           : sessions.find((item) => item.id === activeSessionId);
       if (!session) {
-        throw new Error("Unable to resolve chat session.");
+        throw new Error("Unable to open this chat.");
       }
 
       const token = await ensureAuth();
@@ -756,11 +764,13 @@ function RagAssistant({
       setActiveSessionId(response.session_id);
       writeChatIdToUrl(response.session_id, true);
       void loadSessions();
+      return true;
     } catch (err) {
       setMessages((current) =>
         current.filter((item) => item.id !== optimisticMessage.id),
       );
       handleError(err, "Unable to send message.");
+      return false;
     } finally {
       setPendingKey("send", false);
     }
@@ -773,7 +783,7 @@ function RagAssistant({
 
     const session = sessions.find((item) => item.id === sessionId);
     const confirmed = window.confirm(
-      `Delete "${session?.title || "Untitled session"}"? This cannot be undone.`,
+      `Delete "${session?.title || "Untitled chat"}"? This cannot be undone.`,
     );
     if (!confirmed) {
       return;
@@ -791,7 +801,7 @@ function RagAssistant({
         writeChatIdToUrl(null);
       }
     } catch (err) {
-      handleError(err, "Unable to delete chat session.");
+      handleError(err, "Unable to delete this chat.");
     } finally {
       setDeletingSessionId(null);
     }
@@ -830,6 +840,30 @@ function RagAssistant({
       await sendMessage(message.content);
     } finally {
       setRetryingMessageId(null);
+    }
+  }
+
+  async function downloadSelectedSource(source: Source) {
+    if (!isAdminUser(user) || !source.document_id || downloadingSource) {
+      return;
+    }
+
+    setDownloadingSource(true);
+    try {
+      const token = await ensureAuth();
+      const blob = await downloadSourceDocument(token, source.document_id);
+      const objectUrl = window.URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = objectUrl;
+      link.download = source.display_source || source.source || "source-document";
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(objectUrl);
+    } catch (err) {
+      handleError(err, "Unable to download the source document.");
+    } finally {
+      setDownloadingSource(false);
     }
   }
 
@@ -906,18 +940,20 @@ function RagAssistant({
           onDeleteUserMessage={(message) => void removeUserMessage(message)}
           onRetryUserMessage={(message) => void retryUserMessage(message)}
           onSelectSource={setSelectedSource}
-          onSend={(message) => void sendMessage(message)}
+          onSend={sendMessage}
           pending={pending}
           retryingMessageId={retryingMessageId}
           searchQuery={searchQuery}
           setTopK={setTopK}
           topK={topK}
-          user={user}
         />
       </section>
 
       <SourceDrawer
+        canDownload={isAdminUser(user)}
+        downloading={downloadingSource}
         onClose={() => setSelectedSource(null)}
+        onDownload={(source) => void downloadSelectedSource(source)}
         source={selectedSource}
       />
     </>
@@ -949,17 +985,17 @@ function Sidebar({
 }) {
   return (
     <aside
-      className={`fixed inset-y-0 left-0 z-40 flex w-[320px] max-w-[86vw] flex-col border-r border-outline-variant/60 bg-white transition-transform duration-200 lg:w-[360px] lg:translate-x-0 ${
+      className={`fixed inset-y-0 left-0 z-40 flex w-[320px] max-w-[86vw] flex-col overflow-y-auto border-r border-outline-variant/60 bg-white transition-transform duration-200 lg:w-[360px] lg:translate-x-0 ${
         open ? "translate-x-0" : "-translate-x-full"
       }`}
     >
       <div className="flex items-start justify-between px-7 pb-7 pt-8">
         <div>
-          <h1 className="text-[26px] font-bold leading-8 text-primary">
+          <a className="block text-[26px] font-bold leading-8 text-primary hover:text-primary-container" href="/" onClick={onClose}>
             Aranyabodh
-          </h1>
+          </a>
           <p className="mt-2 text-[14px] font-medium uppercase leading-4 text-[#626b79]">
-            RAG Analysis Engine
+            Forestry knowledge assistant
           </p>
         </div>
         <button
@@ -983,35 +1019,38 @@ function Sidebar({
         </button>
       </div>
 
-      <nav className="mt-8 px-5">
-        <ul className="space-y-3">
+      <nav aria-label="Primary navigation" className="mt-6 px-5">
+        <ul className="space-y-1">
           <SidebarLink active href="/" icon={MessageSquareText} label="Chat" />
           {canManageDocuments(user) ? (
             <>
               <SidebarLink href="/documents" icon={Files} label="Documents" />
-              <SidebarLink href="/ingestion" icon={FileText} label="Ingestion" />
+              <SidebarLink href="/ingestion" icon={Database} label="Document processing" />
             </>
           ) : null}
           {isAdminUser(user) ? (
-            <SidebarLink href="/admin/rag-lab" icon={FlaskConical} label="RAG Lab" />
+            <>
+              <SidebarLink href="/admin/rag-lab" icon={FlaskConical} label="Knowledge Lab" />
+              <SidebarLink href="/admin/users" icon={Users} label="Users" />
+            </>
           ) : null}
           <SidebarLink href="/profile" icon={UserCircle} label="Profile" />
         </ul>
       </nav>
 
-      <section className="mt-8 flex min-h-0 flex-1 flex-col px-7 pb-8">
+      <section className="mt-7 flex min-h-0 flex-1 flex-col px-7 pb-8">
         <div className="flex items-center justify-between">
           <p className="text-[14px] font-semibold uppercase leading-5 text-[#7b8492]">
-            Sessions
+            Recent chats
           </p>
           {pending ? (
             <Loader2 className="h-4 w-4 animate-spin text-primary" />
           ) : null}
         </div>
-        <div className="mt-4 min-h-0 space-y-2 overflow-y-auto pr-1">
+        <div className="mt-4 min-h-0 space-y-2 pr-1">
           {sessions.length === 0 && !pending ? (
             <p className="rounded border border-dashed border-outline-variant p-3 text-[14px] leading-5 text-[#626b79]">
-              No chat sessions yet.
+              Your conversations will appear here.
             </p>
           ) : null}
           {sessions.map((session) => {
@@ -1033,18 +1072,18 @@ function Sidebar({
                   type="button"
                 >
                   <span className="block truncate text-[15px] font-semibold leading-5">
-                    {session.title || "Untitled session"}
+                    {session.title || "Untitled chat"}
                   </span>
                   <span className="mt-1 block text-[12px] leading-4 text-[#7b8492]">
                     {formatWhen(session.updated_at)}
                   </span>
                 </button>
                 <button
-                  aria-label={`Delete ${session.title || "chat session"}`}
+                  aria-label={`Delete ${session.title || "chat"}`}
                   className="grid h-8 w-8 shrink-0 place-items-center rounded text-[#8d5a4a] transition hover:bg-[#fff3ef] disabled:cursor-not-allowed disabled:opacity-60"
                   disabled={deleting}
                   onClick={() => onDeleteSession(session.id)}
-                  title="Delete session"
+                  title="Delete chat"
                   type="button"
                 >
                   {deleting ? (
@@ -1076,14 +1115,15 @@ function SidebarLink({
   return (
     <li>
       <a
-        className={`relative flex h-[54px] items-center gap-5 rounded-sm px-5 text-[18px] font-medium ${
+        aria-current={active ? "page" : undefined}
+        className={`flex min-h-12 items-center gap-4 rounded px-4 py-3 text-[16px] font-medium transition ${
           active
-            ? "bg-[#e8f8ef] text-primary before:absolute before:left-0 before:top-0 before:h-full before:w-1 before:bg-primary"
-            : "text-[#26384d]"
+            ? "bg-[#e8f8ef] text-primary"
+            : "text-[#26384d] hover:bg-surface-container-low"
         }`}
         href={href}
       >
-        <Icon className="h-5 w-5" strokeWidth={2.1} />
+        <Icon className="h-5 w-5 shrink-0" strokeWidth={2.1} />
         {label}
       </a>
     </li>
@@ -1114,58 +1154,14 @@ function Header({
         >
           <Menu className="h-5 w-5" strokeWidth={2.2} />
         </button>
-        <h2 className="truncate text-[21px] font-bold leading-8 text-primary sm:text-[24px]">
+        <a className="truncate text-[21px] font-bold leading-8 text-primary hover:text-primary-container sm:text-[24px]" href="/">
           Aranyabodh
-        </h2>
+        </a>
       </div>
       <div className="flex items-center gap-3 text-[#626b79] sm:gap-4">
         <StatusPill ready={configReady} />
-        {canManageDocuments(user) ? (
-          <a
-            className="hidden h-10 items-center gap-2 rounded border border-outline-variant px-3 text-[14px] font-semibold text-[#26384d] hover:bg-surface-container-low sm:inline-flex"
-            href="/documents"
-          >
-            <Files className="h-4 w-4" />
-            Documents
-          </a>
-        ) : null}
-        {isAdminUser(user) ? (
-          <a
-            className="hidden h-10 items-center gap-2 rounded border border-outline-variant px-3 text-[14px] font-semibold text-[#26384d] hover:bg-surface-container-low sm:inline-flex"
-            href="/admin/rag-lab"
-          >
-            <FlaskConical className="h-4 w-4" />
-            RAG Lab
-          </a>
-        ) : null}
-        {isAdminUser(user) ? (
-          <a
-            className="hidden h-10 items-center gap-2 rounded border border-outline-variant px-3 text-[14px] font-semibold text-[#26384d] hover:bg-surface-container-low sm:inline-flex"
-            href="/admin/users"
-          >
-            <UserCircle className="h-4 w-4" />
-            Users
-          </a>
-        ) : null}
-        {canManageDocuments(user) ? (
-          <a
-            className="hidden h-10 items-center gap-2 rounded border border-outline-variant px-3 text-[14px] font-semibold text-[#26384d] hover:bg-surface-container-low sm:inline-flex"
-            href="/ingestion"
-          >
-            <Database className="h-4 w-4" />
-            Ingestion
-          </a>
-        ) : null}
-        <a
-          aria-label="Profile"
-          className="grid h-10 w-10 place-items-center rounded border border-outline-variant text-current transition hover:bg-surface-container-low"
-          href="/profile"
-          title={`Profile for ${user.email}`}
-        >
-          <UserCircle className="h-5 w-5" strokeWidth={2.1} />
-        </a>
         <button
-          aria-label="Admin setup"
+          aria-label="System settings"
           className="grid h-10 w-10 place-items-center rounded border border-outline-variant text-current transition hover:bg-surface-container-low"
           onClick={onAdminClick}
           type="button"
@@ -1200,7 +1196,7 @@ function StatusPill({ ready }: { ready: boolean }) {
       ) : (
         <AlertCircle className="h-4 w-4" />
       )}
-      {ready ? "Configured" : "Setup Needed"}
+      {ready ? "Ready" : "Needs setup"}
     </span>
   );
 }
@@ -1262,7 +1258,7 @@ function AdminPanel({
             <AdminButton
               disabled={!canManage}
               icon={Upload}
-              label="Open Ingestion"
+              label="Document processing"
               loading={false}
               onClick={() => window.location.assign("/ingestion")}
             />
@@ -1273,8 +1269,8 @@ function AdminPanel({
               label="Backend"
               value={health === "ok" ? API_BASE_URL : "Unavailable"}
             />
-            <Metric label="Documents" value="Use ingestion page" />
-            <Metric label="Index" value="Separate workflow" />
+            <Metric label="Documents" value="Open document library" />
+            <Metric label="Processing" value="Automatic after upload" />
           </div>
         </div>
       </div>
@@ -1445,7 +1441,6 @@ function ChatWorkspace({
   searchQuery,
   setTopK,
   topK,
-  user,
 }: {
   bottomRef: React.RefObject<HTMLDivElement>;
   deletingMessageId: string | null;
@@ -1453,18 +1448,17 @@ function ChatWorkspace({
   onDeleteUserMessage: (message: ChatMessage) => void;
   onRetryUserMessage: (message: ChatMessage) => void;
   onSelectSource: (source: Source) => void;
-  onSend: (message: string) => void;
+  onSend: (message: string) => Promise<boolean>;
   pending: PendingState;
   retryingMessageId: string | null;
   searchQuery: string | null;
   setTopK: (value: number) => void;
   topK: number;
-  user: AuthUser;
 }) {
   return (
-    <div className="relative min-h-[calc(100vh-89px)] pb-[190px]">
+    <div className="relative min-h-[calc(100vh-89px)] pb-[130px]">
       <div className="mx-auto w-full max-w-[1168px] px-5 pt-10 sm:px-8 lg:pt-12">
-        {messages.length === 0 ? <AssistantIntro user={user} /> : null}
+        {messages.length === 0 ? <AssistantIntro /> : null}
 
         <div className="space-y-7">
           {messages.map((message) =>
@@ -1502,7 +1496,7 @@ function ChatWorkspace({
   );
 }
 
-function AssistantIntro({ user }: { user: AuthUser }) {
+function AssistantIntro() {
   return (
     <section className="mx-auto mb-12 max-w-[730px] text-center">
       <div className="mx-auto grid h-20 w-20 place-items-center rounded-lg bg-primary-container text-on-primary-container shadow-tonal">
@@ -1512,73 +1506,30 @@ function AssistantIntro({ user }: { user: AuthUser }) {
         Aranyabodh
       </h3>
       <p className="mt-3 text-[17px] leading-6 text-[#2d3331]">
-        Ask questions over indexed PDF, DOCX, TXT, PPT, and PPTX department
-        sources. Answers include citations and excerpts from retrieved chunks.
+        Ask about forestry rules, procedures, and department records. You can
+        open the supporting source for every answer.
       </p>
-      <div className="mt-7 grid gap-3 text-left sm:grid-cols-2">
-        {canManageDocuments(user) ? (
-          <HomeAction
-            href="/documents"
-            icon={Files}
-            label="Documents"
-            text="Browse the department sources available to the assistant."
-          />
-        ) : null}
-        {isAdminUser(user) ? (
-          <HomeAction
-            href="/admin/rag-lab"
-            icon={FlaskConical}
-            label="RAG Lab"
-            text="Tune and test private retrieval revisions before publication."
-          />
-        ) : null}
-        <HomeAction
-          href="/profile"
-          icon={UserCircle}
-          label="Profile"
-          text="Review account details and update your password."
-        />
-        {canManageDocuments(user) ? (
-          <HomeAction
-            href="/ingestion"
-            icon={Database}
-            label="Upload & Ingest"
-            text="Add documents, run indexing, and preview searchable chunks."
-          />
-        ) : null}
+      <div className="mt-6 flex flex-wrap justify-center gap-2 text-left">
+        {["What is the forest clearance procedure?", "Summarize the latest NPV guidance", "Which documents cover protected areas?"].map((prompt) => (
+          <button
+            className="rounded-full border border-outline-variant bg-white px-4 py-2 text-[13px] font-semibold text-primary transition hover:bg-[#edf8f1]"
+            key={prompt}
+            onClick={() => {
+              const input = document.querySelector<HTMLTextAreaElement>('[aria-label="Chat prompt"]');
+              if (input) {
+                const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set;
+                setter?.call(input, prompt);
+                input.dispatchEvent(new Event("input", { bubbles: true }));
+                input.focus();
+              }
+            }}
+            type="button"
+          >
+            {prompt}
+          </button>
+        ))}
       </div>
     </section>
-  );
-}
-
-function HomeAction({
-  href,
-  icon: Icon,
-  label,
-  text,
-}: {
-  href: string;
-  icon: LucideIcon;
-  label: string;
-  text: string;
-}) {
-  return (
-    <a
-      className="flex min-h-[92px] items-center gap-4 rounded border border-outline-variant bg-white p-4 text-left shadow-tonal transition hover:bg-surface-container-lowest"
-      href={href}
-    >
-      <span className="grid h-11 w-11 shrink-0 place-items-center rounded bg-[#edf8f1] text-primary">
-        <Icon className="h-5 w-5" />
-      </span>
-      <span className="min-w-0">
-        <span className="block text-[15px] font-bold text-[#151a18]">
-          {label}
-        </span>
-        <span className="mt-1 block text-[13px] leading-5 text-[#626b79]">
-          {text}
-        </span>
-      </span>
-    </a>
   );
 }
 
@@ -1709,7 +1660,11 @@ function AssistantMessage({
               )}
             </button>
           </div>
-          <MarkdownContent content={message.content} />
+          <MarkdownContent
+            content={message.content}
+            onSelectSource={onSelectSource}
+            sources={message.sources}
+          />
         </article>
 
         {message.sources?.length ? (
@@ -1717,10 +1672,11 @@ function AssistantMessage({
             <span className="text-[13px] font-semibold uppercase leading-4 text-[#8f99a8]">
               Sources
             </span>
-            {message.sources.map((source) => (
+            {message.sources.map((source, index) => (
               <SourceChip
                 key={`${source.source}-${source.chunk_index}-${source.score}`}
                 label={source.display_source}
+                number={index + 1}
                 onClick={() => onSelectSource(source)}
                 source={source}
               />
@@ -1732,7 +1688,15 @@ function AssistantMessage({
   );
 }
 
-function MarkdownContent({ content }: { content: string }) {
+function MarkdownContent({
+  content,
+  onSelectSource,
+  sources,
+}: {
+  content: string;
+  onSelectSource: (source: Source) => void;
+  sources: Source[];
+}) {
   const normalized = content.replace(/\r\n/g, "\n");
   const lines = normalized.split("\n");
   const blocks: React.ReactNode[] = [];
@@ -1747,7 +1711,12 @@ function MarkdownContent({ content }: { content: string }) {
 
     blocks.push(
       <p className="whitespace-pre-wrap" key={`p-${blocks.length}`}>
-        {renderInlineLines(paragraph, `p-${blocks.length}`)}
+        {renderInlineLines(
+          paragraph,
+          `p-${blocks.length}`,
+          sources,
+          onSelectSource,
+        )}
       </p>,
     );
     paragraph = [];
@@ -1768,7 +1737,12 @@ function MarkdownContent({ content }: { content: string }) {
       >
         {listItems.map((item, index) => (
           <li key={`${index}-${item}`}>
-            {renderInlineMarkdown(item, `li-${blocks.length}-${index}`)}
+            {renderInlineMarkdown(
+              item,
+              `li-${blocks.length}-${index}`,
+              sources,
+              onSelectSource,
+            )}
           </li>
         ))}
       </Tag>,
@@ -1808,6 +1782,59 @@ function MarkdownContent({ content }: { content: string }) {
       continue;
     }
 
+    const nextLine = lines[index + 1];
+    if (
+      line.includes("|") &&
+      nextLine &&
+      /^\s*\|?\s*:?-{3,}/.test(nextLine) &&
+      nextLine.includes("|")
+    ) {
+      flushParagraph();
+      flushList();
+      const splitRow = (row: string) =>
+        row
+          .trim()
+          .replace(/^\|/, "")
+          .replace(/\|$/, "")
+          .split("|")
+          .map((cell) => cell.trim());
+      const headers = splitRow(line);
+      const rows: string[][] = [];
+      index += 2;
+      while (index < lines.length && lines[index].includes("|")) {
+        rows.push(splitRow(lines[index]));
+        index += 1;
+      }
+      index -= 1;
+      blocks.push(
+        <div className="overflow-x-auto rounded border border-outline-variant" key={`table-${blocks.length}`}>
+          <table className="min-w-full border-collapse text-left text-[14px] leading-5">
+            <thead className="bg-surface-container-low">
+              <tr>
+                {headers.map((header, column) => (
+                  <th className="whitespace-nowrap border-b border-outline-variant px-3 py-2 font-bold" key={column} scope="col">
+                    {renderInlineMarkdown(header, `th-${blocks.length}-${column}`, sources, onSelectSource)}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-outline-variant/70 bg-white">
+              {rows.map((row, rowIndex) => (
+                <tr key={rowIndex}>
+                  {headers.map((_, column) => (
+                    <td className="whitespace-nowrap px-3 py-2" key={column}>
+                      {renderInlineMarkdown(row[column] ?? "", `td-${blocks.length}-${rowIndex}-${column}`, sources, onSelectSource)}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>,
+      );
+      continue;
+    }
+
     const unorderedMatch = line.match(/^\s*[-*]\s+(.+)$/);
     const orderedMatch = line.match(/^\s*\d+[.)]\s+(.+)$/);
     if (unorderedMatch || orderedMatch) {
@@ -1836,20 +1863,66 @@ function MarkdownContent({ content }: { content: string }) {
   return <div className="space-y-4">{blocks}</div>;
 }
 
-function renderInlineLines(lines: string[], keyPrefix: string) {
+function renderInlineLines(
+  lines: string[],
+  keyPrefix: string,
+  sources: Source[],
+  onSelectSource: (source: Source) => void,
+) {
   return lines.flatMap((line, index) => [
     index > 0 ? <br key={`${keyPrefix}-br-${index}`} /> : null,
-    ...renderInlineMarkdown(line, `${keyPrefix}-${index}`),
+    ...renderInlineMarkdown(
+      line,
+      `${keyPrefix}-${index}`,
+      sources,
+      onSelectSource,
+    ),
   ]);
 }
 
-function renderInlineMarkdown(text: string, keyPrefix: string) {
+function renderInlineMarkdown(
+  text: string,
+  keyPrefix: string,
+  sources: Source[],
+  onSelectSource: (source: Source) => void,
+) {
   const parts = text.split(
-    /(`[^`]+`|\*\*[^*]+\*\*|__[^_]+__|\*[^*]+\*|_[^_]+_)/g,
+    /(`[^`]+`|\*\*[^*]+\*\*|__[^_]+__|\*[^*]+\*|_[^_]+_|\[\d+(?:\s*,\s*\d+)*\])/g,
   );
 
   return parts.map((part, index) => {
     const key = `${keyPrefix}-${index}`;
+    const citation = part.match(/^\[([\d,\s]+)\]$/);
+    if (citation) {
+      const citationNumbers = citation[1]
+        .split(",")
+        .map((value) => Number(value.trim()))
+        .filter((value) => Number.isInteger(value) && sources[value - 1]);
+      if (citationNumbers.length) {
+        return (
+          <span className="mx-0.5 inline-flex items-baseline gap-0.5" key={key}>
+            <span aria-hidden="true">[</span>
+            {citationNumbers.map((number, citationIndex) => {
+              const source = sources[number - 1];
+              return (
+                <Fragment key={number}>
+                  {citationIndex > 0 ? <span aria-hidden="true">, </span> : null}
+                  <button
+                    aria-label={`Open source ${number}: ${source.display_source}`}
+                    className="inline-flex min-h-7 min-w-5 items-center justify-center rounded bg-[#edf8f1] px-1 align-baseline text-[0.8em] font-bold text-primary underline decoration-primary/40 underline-offset-2 hover:bg-[#dcefe4]"
+                    onClick={() => onSelectSource(source)}
+                    type="button"
+                  >
+                    {number}
+                  </button>
+                </Fragment>
+              );
+            })}
+            <span aria-hidden="true">]</span>
+          </span>
+        );
+      }
+    }
     if (part.startsWith("`") && part.endsWith("`") && part.length > 1) {
       return (
         <code
@@ -1866,7 +1939,11 @@ function renderInlineMarkdown(text: string, keyPrefix: string) {
         (part.startsWith("__") && part.endsWith("__"))) &&
       part.length > 4
     ) {
-      return <strong key={key}>{part.slice(2, -2)}</strong>;
+      return (
+        <strong key={key}>
+          {renderInlineMarkdown(part.slice(2, -2), `${key}-strong`, sources, onSelectSource)}
+        </strong>
+      );
     }
 
     if (
@@ -1874,7 +1951,11 @@ function renderInlineMarkdown(text: string, keyPrefix: string) {
         (part.startsWith("_") && part.endsWith("_"))) &&
       part.length > 2
     ) {
-      return <em key={key}>{part.slice(1, -1)}</em>;
+      return (
+        <em key={key}>
+          {renderInlineMarkdown(part.slice(1, -1), `${key}-em`, sources, onSelectSource)}
+        </em>
+      );
     }
 
     return part;
@@ -1883,24 +1964,26 @@ function renderInlineMarkdown(text: string, keyPrefix: string) {
 
 function SourceChip({
   label,
+  number,
   onClick,
   source,
 }: {
   label: string;
+  number: number;
   onClick: () => void;
   source: Source;
 }) {
   return (
     <button
-      className="inline-flex min-h-9 max-w-full items-center gap-2 rounded-sm border border-[#dfbaa9] bg-tertiary-fixed px-3 py-2 text-left text-[14px] leading-4 text-on-tertiary-fixed transition hover:bg-[#f4d0bf]"
+      aria-label={`Source ${number}: ${label}, ${pageRange(source)}`}
+      className="grid min-h-11 max-w-full grid-cols-[auto_minmax(0,1fr)] items-center gap-x-2 rounded-sm border border-[#dfbaa9] bg-tertiary-fixed px-3 py-2 text-left text-[14px] leading-4 text-on-tertiary-fixed transition hover:bg-[#f4d0bf] sm:inline-flex"
       onClick={onClick}
       type="button"
     >
-      <FileText className="h-4 w-4 shrink-0" strokeWidth={2} />
-      <span className="truncate">{label}</span>
-      <span className="shrink-0 text-[12px] opacity-75">
-        {pageRange(source)} · {evidenceRoleLabel(source)} ·{" "}
-        {source.score.toFixed(3)}
+      <span className="grid h-6 min-w-6 shrink-0 place-items-center rounded-full bg-white/70 text-[12px] font-bold">{number}</span>
+      <span className="min-w-0 truncate font-semibold">{label}</span>
+      <span className="col-start-2 text-[12px] opacity-75 sm:col-auto sm:shrink-0">
+        {pageRange(source)} · {evidenceRoleLabel(source)}
       </span>
     </button>
   );
@@ -1914,7 +1997,7 @@ function TypingIndicator() {
       </div>
       <div className="inline-flex w-fit items-center gap-3 rounded-lg border border-[#d9dee4] bg-white px-5 py-4 text-[15px] font-semibold text-[#626b79] shadow-tonal">
         <Loader2 className="h-4 w-4 animate-spin" />
-        Searching indexed sources
+        Looking through the document library…
       </div>
     </div>
   );
@@ -1938,32 +2021,34 @@ function ChatInput({
   topK,
 }: {
   disabled: boolean;
-  onSend: (message: string) => void;
+  onSend: (message: string) => Promise<boolean>;
   setTopK: (value: number) => void;
   topK: number;
 }) {
   const [value, setValue] = useState("");
   const canSend = value.trim().length > 0 && !disabled;
 
-  function handleSubmit(event: FormEvent<HTMLFormElement>) {
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!canSend) {
       return;
     }
-    onSend(value);
-    setValue("");
+    const sent = await onSend(value);
+    if (sent) {
+      setValue("");
+    }
   }
 
   return (
-    <div className="fixed bottom-0 left-0 right-0 z-20 border-t border-transparent bg-surface/95 px-5 pb-6 pt-3 lg:left-[360px]">
+    <div className="fixed bottom-0 left-0 right-0 z-20 border-t border-transparent bg-surface/95 px-4 pb-3 pt-2 sm:px-6 lg:left-[360px]">
       <div className="mx-auto max-w-[1120px]">
         <form
-          className="flex min-h-[92px] items-center gap-3 rounded-lg border border-[#d9dee4] bg-white px-4 py-4 shadow-tonal sm:gap-4 sm:px-6"
+          className="flex min-h-[72px] items-center gap-3 rounded-lg border border-[#d9dee4] bg-white px-4 py-2.5 shadow-tonal sm:gap-4 sm:px-5"
           onSubmit={handleSubmit}
         >
           <div className="hidden items-center gap-2 rounded border border-outline-variant px-3 py-2 text-[13px] font-semibold text-[#4e5966] sm:flex">
             <Search className="h-4 w-4" />
-            <label htmlFor="top-k">Top K</label>
+            <label htmlFor="top-k" title="How many source excerpts the assistant should retrieve">Sources</label>
             <input
               className="h-7 w-12 rounded border border-outline-variant px-2 text-center"
               id="top-k"
@@ -1974,17 +2059,24 @@ function ChatInput({
               value={topK}
             />
           </div>
-          <input
+          <textarea
             aria-label="Chat prompt"
-            className="min-w-0 flex-1 border-0 bg-transparent text-[17px] leading-7 text-on-surface placeholder:text-[#6e7787] focus:outline-none sm:text-[19px]"
+            className="max-h-40 min-h-11 min-w-0 flex-1 resize-y border-0 bg-transparent py-1.5 text-[17px] leading-7 text-on-surface placeholder:text-[#6e7787] focus:outline-none sm:text-[19px]"
             disabled={disabled}
             onChange={(event) => setValue(event.target.value)}
-            placeholder="Ask about forestry laws, permits, habitats, or source documents..."
+            onKeyDown={(event) => {
+              if (event.key === "Enter" && !event.shiftKey) {
+                event.preventDefault();
+                event.currentTarget.form?.requestSubmit();
+              }
+            }}
+            placeholder="Ask about forestry laws, permits, habitats, or source documents…"
+            rows={1}
             value={value}
           />
           <button
             aria-label="Send prompt"
-            className="grid h-[50px] w-[50px] shrink-0 place-items-center rounded bg-primary text-white transition hover:bg-primary-container disabled:cursor-not-allowed disabled:opacity-55"
+            className="grid h-11 w-11 shrink-0 place-items-center rounded bg-primary text-white transition hover:bg-primary-container disabled:cursor-not-allowed disabled:opacity-55"
             disabled={!canSend}
             type="submit"
           >
@@ -1995,103 +2087,7 @@ function ChatInput({
             )}
           </button>
         </form>
-        <p className="mt-4 text-center text-[12px] font-medium uppercase leading-4 text-[#97a1af]">
-          Aranyabodh
-        </p>
       </div>
-    </div>
-  );
-}
-
-function SourceDrawer({
-  onClose,
-  source,
-}: {
-  onClose: () => void;
-  source: Source | null;
-}) {
-  return (
-    <aside
-      className={`fixed inset-y-0 right-0 z-50 w-[420px] max-w-[92vw] border-l border-outline-variant bg-white shadow-2xl transition-transform duration-200 ${
-        source ? "translate-x-0" : "translate-x-full"
-      }`}
-    >
-      <div className="flex h-full flex-col">
-        <div className="flex items-start justify-between border-b border-outline-variant/70 px-5 py-5">
-          <div className="min-w-0">
-            <p className="text-[13px] font-semibold uppercase text-[#7b8492]">
-              Source Excerpt
-            </p>
-            <h3 className="mt-1 truncate text-[19px] font-bold text-primary">
-              {source?.display_source ?? "Source"}
-            </h3>
-          </div>
-          <button
-            aria-label="Close source excerpt"
-            className="grid h-9 w-9 shrink-0 place-items-center rounded border border-outline-variant hover:bg-surface-container-low"
-            onClick={onClose}
-            type="button"
-          >
-            <X className="h-4 w-4" />
-          </button>
-        </div>
-
-        {source ? (
-          <div className="min-h-0 flex-1 overflow-y-auto px-5 py-5">
-            <div className="grid grid-cols-2 gap-3 text-[13px] leading-5">
-              <DrawerMetric label="File" value={source.source} />
-              <DrawerMetric label="Pages" value={pageRange(source)} />
-              {source.section_heading ? (
-                <DrawerMetric
-                  label="Section"
-                  value={source.section_heading}
-                />
-              ) : null}
-              <DrawerMetric
-                label="Evidence"
-                value={evidenceRoleLabel(source)}
-              />
-              <DrawerMetric label="Chunk" value={source.chunk_index} />
-              <DrawerMetric
-                label="Relevance Score"
-                value={source.score.toFixed(4)}
-              />
-            </div>
-
-            <details
-              className="mt-5 rounded border border-outline-variant/70 bg-surface-container-lowest p-4"
-              open
-            >
-              <summary className="flex cursor-pointer list-none items-center justify-between text-[14px] font-semibold uppercase text-[#626b79]">
-                Excerpt
-                <ChevronDown className="h-4 w-4" />
-              </summary>
-              <p className="mt-4 whitespace-pre-wrap text-[15px] leading-7 text-[#202625]">
-                {source.text}
-              </p>
-            </details>
-          </div>
-        ) : null}
-      </div>
-    </aside>
-  );
-}
-
-function DrawerMetric({
-  label,
-  value,
-}: {
-  label: string;
-  value: React.ReactNode;
-}) {
-  return (
-    <div className="min-w-0 rounded bg-surface-container-low p-3">
-      <p className="text-[12px] font-semibold uppercase text-[#7b8492]">
-        {label}
-      </p>
-      <p className="mt-1 break-words text-[14px] font-semibold text-[#151a18]">
-        {value}
-      </p>
     </div>
   );
 }

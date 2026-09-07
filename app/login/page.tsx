@@ -3,7 +3,7 @@
 import { AlertCircle, Loader2, ShieldCheck } from "lucide-react";
 import { FormEvent, useEffect, useState } from "react";
 import { PasswordInput } from "../../components/password-input";
-import { API_BASE_URL, login, readStoredAuth, storeAuth } from "../../lib/api";
+import { login, readStoredAuth, storeAuth } from "../../lib/api";
 
 function formatError(err: unknown) {
   return err instanceof Error ? err.message : "Unable to sign in.";
@@ -46,7 +46,8 @@ export default function LoginRoute() {
             Aranyabodh
           </h1>
           <p className="mt-5 max-w-xl text-[18px] leading-7 text-white/78">
-            Secure access for the forest department RAG pilot.
+            Find reliable answers in department documents and check the source
+            behind every response.
           </p>
         </div>
       </section>
@@ -62,7 +63,9 @@ export default function LoginRoute() {
             </span>
             <div>
               <h2 className="text-[24px] font-bold text-primary">Sign in</h2>
-              <p className="text-[14px] text-[#626b79]">{API_BASE_URL}</p>
+              <p className="text-[14px] text-[#626b79]">
+                Sign in with your department account
+              </p>
             </div>
           </div>
 
@@ -108,6 +111,9 @@ export default function LoginRoute() {
             {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
             Sign in
           </button>
+          <p className="mt-4 text-center text-[13px] leading-5 text-[#626b79]">
+            Contact your administrator if you cannot sign in or need your password reset.
+          </p>
         </form>
       </section>
     </main>

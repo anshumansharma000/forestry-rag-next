@@ -65,7 +65,7 @@ export const defaultRagLabConfig: RagLabConfig = {
 export const canAccessRagLab = (role?: Role | null) => role === "admin";
 export const ragLabWorkspaceHref = (experimentId: string) => `/admin/rag-lab/workspace?experimentId=${encodeURIComponent(experimentId)}`;
 export const ragSourceLabel = (source: RagSource) => {
-  const page = source.page_start == null ? "No page" : source.page_end != null && source.page_end !== source.page_start ? `Pages ${source.page_start}–${source.page_end}` : `Page ${source.page_start}`;
+  const page = source.page_start == null ? "Page number unavailable" : source.page_end != null && source.page_end !== source.page_start ? `Pages ${source.page_start}–${source.page_end}` : `Page ${source.page_start}`;
   return [source.display_source, page, source.section_heading].filter(Boolean).join(" · ");
 };
 export const copyTrialRetrieval = (config: RagLabConfig, trial: Pick<RagLabTrial, "retrieval_config">): RagLabConfig => ({

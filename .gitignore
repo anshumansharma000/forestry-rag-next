@@ -13,3 +13,4 @@ pnpm-debug.log*
 
 .DS_Store
 USAGE_GUIDE.md
+*.md

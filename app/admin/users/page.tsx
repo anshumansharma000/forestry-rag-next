@@ -11,9 +11,11 @@ import {
   Save,
   ShieldCheck,
   UserCog,
+  X,
 } from "lucide-react";
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { PasswordInput } from "../../../components/password-input";
+import { validatePassword } from "../../../lib/auth-client";
 import {
   AdminUser,
   ApiError,
@@ -67,6 +69,11 @@ export default function AdminUsersPage() {
   const [loading, setLoading] = useState(true);
   const [savingUserId, setSavingUserId] = useState<string | null>(null);
   const [resettingUserId, setResettingUserId] = useState<string | null>(null);
+  const [resetUser, setResetUser] = useState<AdminUser | null>(null);
+  const [resetPassword, setResetPassword] = useState("");
+  const [resetConfirmation, setResetConfirmation] = useState("");
+  const [resetValidation, setResetValidation] = useState<string | null>(null);
+  const resetCloseRef = useRef<HTMLButtonElement>(null);
   const [newUser, setNewUser] = useState({
     email: "",
     full_name: "",
@@ -143,6 +150,23 @@ export default function AdminUsersPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  useEffect(() => {
+    if (!resetUser) return;
+    const previousFocus = document.activeElement as HTMLElement | null;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    resetCloseRef.current?.focus();
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setResetUser(null);
+    };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => {
+      window.removeEventListener("keydown", closeOnEscape);
+      document.body.style.overflow = previousOverflow;
+      previousFocus?.focus();
+    };
+  }, [resetUser]);
+
   async function handleCreateUser(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setError(null);
@@ -196,19 +220,30 @@ export default function AdminUsersPage() {
     }
   }
 
-  async function handleResetPassword(user: AdminUser) {
-    const newPassword = window.prompt(`New password for ${user.email}`);
-    if (!newPassword) {
+  async function handleResetPassword(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!resetUser) return;
+    const validation = validatePassword(resetPassword);
+    if (!validation.valid) {
+      setResetValidation(validation.errors.join(" "));
+      return;
+    }
+    if (resetPassword !== resetConfirmation) {
+      setResetValidation("Passwords do not match.");
       return;
     }
 
     setError(null);
     setNotice(null);
-    setResettingUserId(user.id);
+    setResetValidation(null);
+    setResettingUserId(resetUser.id);
     try {
       const token = await ensureToken();
-      await resetUserPassword(token, user.id, newPassword, true);
+      await resetUserPassword(token, resetUser.id, resetPassword, true);
       setNotice("Password reset. User must change it at next sign-in.");
+      setResetUser(null);
+      setResetPassword("");
+      setResetConfirmation("");
     } catch (err) {
       setError(formatError(err));
     } finally {
@@ -232,8 +267,7 @@ export default function AdminUsersPage() {
               User Management
             </h1>
             <p className="mt-2 text-[14px] text-[#626b79]">
-              Create accounts, assign roles, disable access, and reset pilot
-              passwords.
+              Create accounts, assign roles, disable access, and reset passwords.
             </p>
           </div>
           <div className="inline-flex w-fit items-center gap-2 rounded border border-[#b7d6c4] bg-[#edf8f1] px-3 py-2 text-[13px] font-semibold text-primary">
@@ -316,7 +350,7 @@ export default function AdminUsersPage() {
               >
                 {roles.map((role) => (
                   <option key={role} value={role}>
-                    {role}
+                    {role.replaceAll("_", " ")}
                   </option>
                 ))}
               </select>
@@ -333,7 +367,7 @@ export default function AdminUsersPage() {
                 }
                 type="checkbox"
               />
-              Require password change
+              Require a new password at first sign-in
             </label>
 
             <button
@@ -451,7 +485,7 @@ export default function AdminUsersPage() {
                           >
                             {roles.map((role) => (
                               <option key={role} value={role}>
-                                {role}
+                                {role.replaceAll("_", " ")}
                               </option>
                             ))}
                           </select>
@@ -489,7 +523,13 @@ export default function AdminUsersPage() {
                             <button
                               className="grid h-10 w-10 place-items-center rounded border border-outline-variant text-[#26384d] hover:bg-surface-container-low disabled:opacity-60"
                               disabled={!canManage || resetting}
-                              onClick={() => void handleResetPassword(user)}
+                              aria-label={`Reset password for ${user.email}`}
+                              onClick={() => {
+                                setResetUser(user);
+                                setResetPassword("");
+                                setResetConfirmation("");
+                                setResetValidation(null);
+                              }}
                               title="Reset password"
                               type="button"
                             >
@@ -510,6 +550,39 @@ export default function AdminUsersPage() {
           </section>
         </section>
       </div>
+      {resetUser ? (
+        <div
+          className="fixed inset-0 z-50 grid place-items-center bg-black/35 p-4"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setResetUser(null);
+          }}
+          role="presentation"
+        >
+          <form
+            aria-labelledby="reset-password-title"
+            aria-modal="true"
+            className="w-full max-w-md rounded bg-white p-6 shadow-xl"
+            onSubmit={handleResetPassword}
+            role="dialog"
+          >
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <h2 className="text-xl font-bold text-primary" id="reset-password-title">Reset password</h2>
+                <p className="mt-1 text-sm text-[#626b79]">{resetUser.email}</p>
+              </div>
+              <button aria-label="Close password reset" className="grid h-11 w-11 place-items-center rounded hover:bg-surface-container-low" onClick={() => setResetUser(null)} ref={resetCloseRef} type="button"><X className="h-5 w-5" /></button>
+            </div>
+            <p className="mt-4 text-sm leading-5 text-[#4e5966]">The user will be required to choose another password at their next sign-in.</p>
+            {resetValidation ? <p className="mt-4 rounded border border-[#f0c4b6] bg-[#fff5f1] p-3 text-sm text-[#743f2c]" role="alert">{resetValidation}</p> : null}
+            <TextField label="Temporary password" minLength={8} onChange={setResetPassword} required type="password" value={resetPassword} />
+            <TextField label="Confirm temporary password" minLength={8} onChange={setResetConfirmation} required type="password" value={resetConfirmation} />
+            <div className="mt-6 flex justify-end gap-3">
+              <button className="secondary-button" onClick={() => setResetUser(null)} type="button">Cancel</button>
+              <button className="primary-button" disabled={resettingUserId === resetUser.id} type="submit">{resettingUserId === resetUser.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <KeyRound className="h-4 w-4" />}Reset password</button>
+            </div>
+          </form>
+        </div>
+      ) : null}
     </main>
   );
 }

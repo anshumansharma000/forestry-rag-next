@@ -46,6 +46,8 @@ export type ConfigValidation = {
 export type EvidenceRole = "matched" | "neighbor";
 
 export type Source = {
+  /** Stable backend identifier used for authorized access to the original file. */
+  document_id?: string | null;
   source: string;
   display_source: string;
   page_start: number | null;
@@ -451,6 +453,25 @@ export function getMessages(token: string, sessionId: string) {
     `/chat/sessions/${encodeURIComponent(sessionId)}/messages`,
     { token },
   );
+}
+
+export async function downloadSourceDocument(
+  token: string,
+  documentId: string,
+): Promise<Blob> {
+  const response = await fetch(
+    `${API_BASE_URL}/documents/${encodeURIComponent(documentId)}/download`,
+    {
+      headers: { Authorization: `Bearer ${token}` },
+    },
+  );
+
+  if (!response.ok) {
+    const error = await readError(response);
+    throw new ApiError({ ...error, status: response.status });
+  }
+
+  return response.blob();
 }
 
 export function ask(token: string, question: string, topK?: number) {

@@ -323,9 +323,9 @@ export default function DocumentsPage() {
 
           <div className="mt-3 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
             <div className="grid gap-3 sm:grid-cols-4 lg:flex lg:flex-wrap">
-              <SelectControl label="Ingestion status" value={query.status} onChange={(value) => setStatus(value as DocumentLibraryQuery["status"])}>
-                <option value="indexed">Indexed</option>
-                <option value="failed">Failed</option>
+              <SelectControl label="Processing status" value={query.status} onChange={(value) => setStatus(value as DocumentLibraryQuery["status"])}>
+                <option value="indexed">Ready for chat</option>
+                <option value="failed">Processing failed</option>
               </SelectControl>
               <SelectControl label="File type" value={query.kind ?? ""} onChange={(value) => setControl({ kind: (value || undefined) as DocumentLibraryQuery["kind"] })}>
                 <option value="">All file types</option>
@@ -373,8 +373,8 @@ export default function DocumentsPage() {
                 }}
                 grow
               >
-                <option value="updated_at:desc">Newest indexed</option>
-                <option value="updated_at:asc">Oldest indexed</option>
+                <option value="updated_at:desc">Newest processed</option>
+                <option value="updated_at:asc">Oldest processed</option>
                 <option value="title:asc">Title A–Z</option>
                 <option value="title:desc">Title Z–A</option>
               </SelectControl>
@@ -484,7 +484,7 @@ function DocumentTable({ canRetry, documents, onRetry, retryStates }: {
               <th className="w-[28%] px-4 py-3 font-bold" scope="col">Document</th>
               <th className="w-[15%] px-4 py-3 font-bold" scope="col">Type</th>
               <th className="w-[20%] px-4 py-3 font-bold" scope="col">Authority / year</th>
-              <th className="w-[15%] px-4 py-3 font-bold" scope="col">Size</th>
+              <th className="w-[15%] px-4 py-3 font-bold" scope="col">Content</th>
               <th className="w-[22%] px-4 py-3 font-bold" scope="col">Status</th>
             </tr>
           </thead>
@@ -529,7 +529,7 @@ function DocumentCards({ canRetry, documents, onRetry, retryStates }: {
             <CardDetail label="Type"><TypeCell document={document} /></CardDetail>
             <CardDetail label="Status"><DocumentStatus document={document} canRetry={canRetry} onRetry={onRetry} retryState={retryStates[document.filename]} /></CardDetail>
             <CardDetail label="Authority / year"><AuthorityCell document={document} /></CardDetail>
-            <CardDetail label="Size"><SizeCell document={document} /></CardDetail>
+            <CardDetail label="Content"><SizeCell document={document} /></CardDetail>
           </dl>
         </article>
       ))}
@@ -546,7 +546,7 @@ function AuthorityCell({ document }: { document: DocumentLibraryItem }) {
 }
 
 function SizeCell({ document }: { document: DocumentLibraryItem }) {
-  return <div className="text-[13px] leading-5 text-[#4e5966]"><p>{document.page_count == null ? "—" : `${document.page_count.toLocaleString()} ${document.page_count === 1 ? "page" : "pages"}`}</p><p className="text-[12px] text-[#737c88]">{document.chunk_count.toLocaleString()} {document.chunk_count === 1 ? "indexed chunk" : "indexed chunks"}</p></div>;
+  return <div className="text-[13px] leading-5 text-[#4e5966]"><p>{document.page_count == null ? "Page number unavailable" : `${document.page_count.toLocaleString()} ${document.page_count === 1 ? "page" : "pages"}`}</p><p className="text-[12px] text-[#737c88]">{document.chunk_count.toLocaleString()} searchable {document.chunk_count === 1 ? "excerpt" : "excerpts"}</p></div>;
 }
 
 function CardDetail({ children, label }: { children: React.ReactNode; label: string }) {
@@ -561,7 +561,7 @@ function EmptyState({ filtered, onClear, status }: { filtered: boolean; onClear:
   return (
     <div className="rounded border border-dashed border-outline-variant bg-white px-5 py-16 text-center">
       <span className="mx-auto grid h-12 w-12 place-items-center rounded-full bg-[#edf8f1] text-primary"><FileText className="h-5 w-5" /></span>
-      <h2 className="mt-4 text-[17px] font-bold text-[#151a18]">{status === "failed" ? "No failed ingestions" : filtered ? "No documents match your search and filters" : "No indexed documents yet."}</h2>
+      <h2 className="mt-4 text-[17px] font-bold text-[#151a18]">{status === "failed" ? "No processing failures" : filtered ? "No documents match your search and filters" : "No documents are ready for chat yet."}</h2>
       {filtered ? <button className="mt-4 h-11 rounded border border-outline-variant bg-white px-4 text-[14px] font-bold text-primary hover:bg-surface-container-low" onClick={onClear} type="button">Clear search and filters</button> : null}
     </div>
   );

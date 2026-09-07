@@ -26,6 +26,10 @@ import {
   updateCurrentUser,
 } from "../../lib/api";
 
+function titleCaseRole(role: string) {
+  return role.replaceAll("_", " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
 export default function ProfilePage() {
   const [auth, setAuth] = useState<AuthState | null>(null);
   const [user, setUser] = useState<AuthUser | null>(null);
@@ -155,12 +159,12 @@ export default function ProfilePage() {
               User Profile
             </h1>
             <p className="mt-2 text-[14px] text-[#626b79]">
-              Manage your account details and password.
+              Update your name or change your password.
             </p>
           </div>
           <div className="inline-flex w-fit items-center gap-2 rounded border border-[#b7d6c4] bg-[#edf8f1] px-3 py-2 text-[13px] font-semibold text-primary">
             <ShieldCheck className="h-4 w-4" />
-            {user?.role ?? "Loading"}
+            {user ? titleCaseRole(user.role) : "Loading"}
           </div>
         </header>
 
@@ -198,7 +202,7 @@ export default function ProfilePage() {
 
               <div className="mt-4 grid gap-3 text-[13px] leading-5 text-[#4e5966]">
                 <Metric label="Email" value={user?.email ?? "n/a"} />
-                <Metric label="Role" value={user?.role ?? "n/a"} />
+                <Metric label="Role" value={user ? titleCaseRole(user.role) : "n/a"} />
               </div>
 
               <button

@@ -5,6 +5,7 @@ import type { Source } from "../lib/api";
 import { SourceDrawer } from "../components/source-drawer";
 
 const source: Source = {
+  citation_number: 1,
   document_id: "document-123",
   source: "forest-rules.pdf",
   display_source: "Forest Rules.pdf",

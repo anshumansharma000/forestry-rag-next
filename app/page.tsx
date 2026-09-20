@@ -11,7 +11,6 @@ import {
   LogOut,
   Menu,
   RefreshCw,
-  Search,
   Send,
   Settings,
   ShieldCheck,
@@ -20,10 +19,15 @@ import {
   X,
   type LucideIcon,
 } from "lucide-react";
-import { Fragment, FormEvent, useCallback, useEffect, useRef, useState } from "react";
+import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import { PasswordInput } from "../components/password-input";
 import { AppSidebar } from "../components/app-sidebar";
 import { SourceDrawer } from "../components/source-drawer";
+import {
+  MarkdownContent,
+  citedSourcesForMessage,
+  sourcesForAskResponse,
+} from "../components/markdown-content";
 import {
   formatApiError,
   isTokenNearExpiry,
@@ -55,6 +59,19 @@ import {
   refreshAuth,
   storeAuth,
 } from "../lib/api";
+import { answerOutcomeCopy, isAbstentionOutcome } from "../lib/answer-outcome";
+import {
+  ChatSubmission,
+  canStartChatSubmission,
+  clearPendingChat,
+  clearPendingChatsForUser,
+  newRequestId,
+  pendingUserMessage,
+  readPendingChat,
+  retryDecision,
+  submissionCompleted,
+  writePendingChat,
+} from "../lib/chat-submission";
 
 type PendingState = {
   auth: boolean;
@@ -71,8 +88,6 @@ const emptyPending: PendingState = {
   messages: false,
   send: false,
 };
-
-const DEFAULT_TOP_K = 5;
 
 function nowIso() {
   return new Date().toISOString();
@@ -120,6 +135,13 @@ function evidenceRoleLabel(source: Source) {
 
 function messageAbstained(message: ChatMessage) {
   return message.metadata?.abstained === true;
+}
+
+function messageOutcome(message: ChatMessage) {
+  const outcome = message.metadata?.outcome;
+  return outcome === "answered" || outcome === "insufficient_evidence" || outcome === "unsupported_answer" || outcome === "not_generated"
+    ? outcome
+    : undefined;
 }
 
 function messageConfidence(message: ChatMessage) {
@@ -174,6 +196,20 @@ async function copyTextToClipboard(text: string) {
   textarea.select();
   document.execCommand("copy");
   document.body.removeChild(textarea);
+}
+
+function waitForRetry(delayMs: number, signal: AbortSignal) {
+  return new Promise<void>((resolve, reject) => {
+    if (signal.aborted) {
+      reject(new DOMException("Retry cancelled", "AbortError"));
+      return;
+    }
+    const timer = window.setTimeout(resolve, delayMs);
+    signal.addEventListener("abort", () => {
+      window.clearTimeout(timer);
+      reject(new DOMException("Retry cancelled", "AbortError"));
+    }, { once: true });
+  });
 }
 
 export default function Home() {
@@ -574,7 +610,6 @@ function RagAssistant({
     auth: false,
   });
   const [error, setError] = useState<string | null>(null);
-  const [topK, setTopK] = useState(DEFAULT_TOP_K);
   const [searchQuery, setSearchQuery] = useState<string | null>(null);
   const [deletingSessionId, setDeletingSessionId] = useState<string | null>(
     null,
@@ -585,7 +620,16 @@ function RagAssistant({
   const [retryingMessageId, setRetryingMessageId] = useState<string | null>(
     null,
   );
+  const [pendingSubmission, setPendingSubmission] = useState<ChatSubmission | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const askControllerRef = useRef<AbortController | null>(null);
+  const submissionInFlightRef = useRef(false);
+  const activeSessionRef = useRef<string | null>(null);
+
+  useEffect(() => () => askControllerRef.current?.abort(), []);
+  useEffect(() => {
+    activeSessionRef.current = activeSessionId;
+  }, [activeSessionId]);
 
   const setPendingKey = useCallback(
     (key: keyof PendingState, value: boolean) => {
@@ -656,14 +700,26 @@ function RagAssistant({
       try {
         const token = await ensureAuth();
         const data = await getMessages(token, sessionId);
-        setMessages(data.messages);
+        if (activeSessionRef.current !== sessionId) return;
+        const persisted = readPendingChat(user.id, sessionId);
+        if (persisted && submissionCompleted(data.messages, persisted.requestId)) {
+          clearPendingChat(user.id, sessionId);
+          setPendingSubmission(null);
+          setMessages(data.messages);
+        } else if (persisted) {
+          setPendingSubmission(persisted);
+          setMessages([...data.messages, pendingUserMessage(persisted)]);
+        } else {
+          setPendingSubmission(null);
+          setMessages(data.messages);
+        }
       } catch (err) {
         handleError(err, "Unable to load messages.");
       } finally {
         setPendingKey("messages", false);
       }
     },
-    [ensureAuth, handleError, setPendingKey],
+    [ensureAuth, handleError, setPendingKey, user.id],
   );
 
   useEffect(() => {
@@ -705,28 +761,108 @@ function RagAssistant({
     return session;
   }
 
+  async function submitFrozenTurn(submission: ChatSubmission) {
+    if (submissionInFlightRef.current || activeSessionRef.current !== submission.sessionId) return false;
+    submissionInFlightRef.current = true;
+    setPendingKey("send", true);
+    setPendingSubmission(submission);
+    writePendingChat(submission);
+
+    let attempt = 0;
+    try {
+      while (true) {
+        attempt += 1;
+        let controller: AbortController | null = null;
+        try {
+          const token = await ensureAuth();
+          controller = new AbortController();
+          askControllerRef.current = controller;
+          const response = await askSession(
+            token,
+            submission.sessionId,
+            submission.message,
+            submission.requestId,
+            submission.topK,
+            controller.signal,
+          );
+          if (activeSessionRef.current !== submission.sessionId) return false;
+          clearPendingChat(submission.userId, submission.sessionId);
+          setPendingSubmission(null);
+          setSearchQuery(response.search_query ?? null);
+          const serverUser = {
+            ...response.user_message,
+            metadata: { ...response.user_message.metadata, request_id: response.request_id },
+          };
+          const serverAssistant = {
+            ...response.assistant_message,
+            metadata: {
+              ...response.assistant_message.metadata,
+              request_id: response.request_id,
+              outcome: response.outcome,
+              retrieval_confidence: response.confidence,
+              abstained: response.abstained,
+              cited_sources: sourcesForAskResponse(response),
+            },
+            sources: response.assistant_message.sources?.length
+              ? response.assistant_message.sources
+              : response.sources,
+          };
+          setMessages((current) => [
+            ...current.filter((item) =>
+              item.id !== `pending-${submission.requestId}` &&
+              item.id !== serverUser.id && item.id !== serverAssistant.id,
+            ),
+            serverUser,
+            serverAssistant,
+          ]);
+          void loadSessions();
+          return true;
+        } catch (err) {
+          const decision = retryDecision(err, attempt);
+          if (decision.kind === "retry") {
+            try {
+              await waitForRetry(decision.delayMs, controller?.signal ?? new AbortController().signal);
+            } catch (delayError) {
+              if (delayError instanceof DOMException && delayError.name === "AbortError") return false;
+              throw delayError;
+            }
+            if (activeSessionRef.current !== submission.sessionId) return false;
+            continue;
+          }
+          if (decision.kind === "deleted") {
+            clearPendingChat(submission.userId, submission.sessionId);
+            setPendingSubmission(null);
+            setMessages((current) => current.filter((item) => item.id !== `pending-${submission.requestId}`));
+            setError("This original turn was deleted and cannot be retried.");
+            return false;
+          }
+          if (decision.kind === "conflict") {
+            setError("This turn conflicts with another operation. Review it, then retry or discard it.");
+            return false;
+          }
+          if (err instanceof DOMException && err.name === "AbortError") return false;
+          handleError(err, "Unable to confirm whether the message completed. Retry with the same request key or discard it.");
+          return false;
+        }
+      }
+    } finally {
+      askControllerRef.current = null;
+      submissionInFlightRef.current = false;
+      setPendingKey("send", false);
+    }
+  }
+
   async function sendMessage(rawMessage: string) {
     const message = rawMessage.trim();
-    if (!message || pending.send) {
+    if (!canStartChatSubmission(message, pending.send || submissionInFlightRef.current, pendingSubmission != null)) {
       return false;
     }
 
     setError(null);
     setGlobalError(null);
     setSearchQuery(null);
-    setPendingKey("send", true);
-
-    const optimisticMessage: ChatMessage = {
-      id: `pending-${Date.now()}`,
-      session_id: activeSessionId ?? "pending-session",
-      role: "user",
-      content: message,
-      sources: [],
-      metadata: { pending: true },
-      created_at: nowIso(),
-    };
-
-    setMessages((current) => [...current, optimisticMessage]);
+    submissionInFlightRef.current = true;
+    const requestId = newRequestId();
 
     try {
       const session =
@@ -736,39 +872,33 @@ function RagAssistant({
       if (!session) {
         throw new Error("Unable to open this chat.");
       }
-
-      const token = await ensureAuth();
-      const response = await askSession(token, session.id, message, topK);
-      setSearchQuery(response.search_query ?? null);
-      setMessages((current) => [
-        ...current.filter((item) => item.id !== optimisticMessage.id),
-        response.user_message,
-        {
-          ...response.assistant_message,
-          metadata: {
-            ...response.assistant_message.metadata,
-            retrieval_confidence: response.confidence,
-            abstained: response.abstained,
-          },
-          sources:
-            response.sources?.length > 0
-              ? response.sources
-              : response.assistant_message.sources,
-        },
-      ]);
-      setActiveSessionId(response.session_id);
-      writeChatIdToUrl(response.session_id, true);
-      void loadSessions();
-      return true;
+      activeSessionRef.current = session.id;
+      const submission: ChatSubmission = {
+        userId: user.id,
+        sessionId: session.id,
+        requestId,
+        message,
+        createdAt: nowIso(),
+      };
+      writePendingChat(submission);
+      setPendingSubmission(submission);
+      setMessages((current) => [...current, pendingUserMessage(submission)]);
+      submissionInFlightRef.current = false;
+      return await submitFrozenTurn(submission);
     } catch (err) {
-      setMessages((current) =>
-        current.filter((item) => item.id !== optimisticMessage.id),
-      );
       handleError(err, "Unable to send message.");
       return false;
     } finally {
-      setPendingKey("send", false);
+      submissionInFlightRef.current = false;
     }
+  }
+
+  function discardPendingSubmission() {
+    if (!pendingSubmission) return;
+    clearPendingChat(pendingSubmission.userId, pendingSubmission.sessionId);
+    setMessages((current) => current.filter((item) => item.id !== `pending-${pendingSubmission.requestId}`));
+    setPendingSubmission(null);
+    setError(null);
   }
 
   async function removeSession(sessionId: string) {
@@ -788,6 +918,7 @@ function RagAssistant({
     try {
       const token = await ensureAuth();
       await deleteSession(token, sessionId);
+      clearPendingChat(user.id, sessionId);
       const remaining = sessions.filter((item) => item.id !== sessionId);
       setSessions(remaining);
       if (sessionId === activeSessionId) {
@@ -800,6 +931,12 @@ function RagAssistant({
     } finally {
       setDeletingSessionId(null);
     }
+  }
+
+  function logoutAndClearPending() {
+    askControllerRef.current?.abort();
+    clearPendingChatsForUser(user.id);
+    logout();
   }
 
   async function removeUserMessage(message: ChatMessage) {
@@ -877,8 +1014,10 @@ function RagAssistant({
         mobileOpen={sidebarOpen}
         onMobileOpenChange={setSidebarOpen}
         onNewChat={() => {
+          askControllerRef.current?.abort();
           setActiveSessionId(null);
           setMessages([]);
+          setPendingSubmission(null);
           setSearchQuery(null);
           writeChatIdToUrl(null);
           setSidebarOpen(false);
@@ -890,7 +1029,9 @@ function RagAssistant({
           deletingSessionId={deletingSessionId}
           onDeleteSession={(sessionId) => void removeSession(sessionId)}
           onSelectSession={(sessionId) => {
+            askControllerRef.current?.abort();
             setActiveSessionId(sessionId);
+            setPendingSubmission(null);
             setSearchQuery(null);
             writeChatIdToUrl(sessionId);
             setSidebarOpen(false);
@@ -904,7 +1045,7 @@ function RagAssistant({
         <Header
           configReady={configReady}
           onAdminClick={() => setAdminOpen(!adminOpen)}
-          onLogout={logout}
+          onLogout={logoutAndClearPending}
           onMenuClick={() => setSidebarOpen(true)}
           user={user}
         />
@@ -931,11 +1072,12 @@ function RagAssistant({
           onRetryUserMessage={(message) => void retryUserMessage(message)}
           onSelectSource={setSelectedSource}
           onSend={sendMessage}
+          onDiscardPending={discardPendingSubmission}
+          onRetryPending={() => pendingSubmission ? void submitFrozenTurn(pendingSubmission) : undefined}
           pending={pending}
+          pendingSubmission={pendingSubmission}
           retryingMessageId={retryingMessageId}
           searchQuery={searchQuery}
-          setTopK={setTopK}
-          topK={topK}
         />
       </section>
 
@@ -1334,11 +1476,12 @@ function ChatWorkspace({
   onRetryUserMessage,
   onSelectSource,
   onSend,
+  onDiscardPending,
+  onRetryPending,
   pending,
+  pendingSubmission,
   retryingMessageId,
   searchQuery,
-  setTopK,
-  topK,
 }: {
   bottomRef: React.RefObject<HTMLDivElement>;
   deletingMessageId: string | null;
@@ -1347,11 +1490,12 @@ function ChatWorkspace({
   onRetryUserMessage: (message: ChatMessage) => void;
   onSelectSource: (source: Source) => void;
   onSend: (message: string) => Promise<boolean>;
+  onDiscardPending: () => void;
+  onRetryPending: () => void;
   pending: PendingState;
+  pendingSubmission: ChatSubmission | null;
   retryingMessageId: string | null;
   searchQuery: string | null;
-  setTopK: (value: number) => void;
-  topK: number;
 }) {
   return (
     <div className="relative min-h-[calc(100vh-89px)] pb-[130px]">
@@ -1379,16 +1523,23 @@ function ChatWorkspace({
             ),
           )}
           {pending.send ? <TypingIndicator /> : null}
+          {pendingSubmission && !pending.send ? (
+            <div className="ml-auto flex max-w-[840px] flex-wrap items-center justify-between gap-3 rounded border border-[#e0cfa9] bg-[#fff9e9] px-4 py-3 text-sm text-[#6c551d]" role="status">
+              <span>Completion could not be confirmed. Retrying will use the same request key.</span>
+              <span className="flex gap-2">
+                <button className="rounded border border-[#c8aa67] bg-white px-3 py-2 font-semibold" onClick={onRetryPending} type="button">Retry</button>
+                <button className="rounded px-3 py-2 font-semibold underline" onClick={onDiscardPending} type="button">Discard</button>
+              </span>
+            </div>
+          ) : null}
           {searchQuery ? <DebugDetails searchQuery={searchQuery} /> : null}
           <div ref={bottomRef} />
         </div>
       </div>
 
       <ChatInput
-        disabled={pending.send}
+        disabled={pending.send || pendingSubmission != null}
         onSend={onSend}
-        setTopK={setTopK}
-        topK={topK}
       />
     </div>
   );
@@ -1500,8 +1651,17 @@ function AssistantMessage({
   onSelectSource: (source: Source) => void;
 }) {
   const abstained = messageAbstained(message);
+  const outcome = messageOutcome(message);
+  const outcomePresentation = outcome ? answerOutcomeCopy[outcome] : null;
+  const unsuccessful = outcome ? isAbstentionOutcome(outcome) : abstained;
   const confidence = messageConfidence(message);
   const [copied, setCopied] = useState(false);
+  const responseCitations = message.metadata?.cited_sources;
+  const citedSources = Array.isArray(responseCitations)
+    ? (responseCitations as Source[])
+    : unsuccessful
+      ? []
+      : citedSourcesForMessage(message.content, message.sources ?? []);
 
   async function handleCopy() {
     try {
@@ -1517,7 +1677,7 @@ function AssistantMessage({
     <div className="grid grid-cols-[42px_minmax(0,1fr)] gap-4 sm:grid-cols-[50px_minmax(0,960px)] sm:gap-5">
       <div
         className={`grid h-[42px] w-[42px] place-items-center rounded-lg text-white sm:h-[50px] sm:w-[50px] ${
-          abstained ? "bg-[#8d5a4a]" : "bg-primary"
+          unsuccessful ? "bg-[#8d5a4a]" : "bg-primary"
         }`}
       >
         <ShieldCheck className="h-6 w-6" strokeWidth={2.1} />
@@ -1526,21 +1686,23 @@ function AssistantMessage({
       <div>
         <article
           className={`rounded-lg border px-5 py-[18px] text-[18px] leading-7 text-[#202625] shadow-tonal sm:px-[22px] ${
-            abstained
+            unsuccessful
               ? "border-[#e5bda9] bg-[#fff8f5]"
               : "border-[#d9dee4] bg-white"
           }`}
         >
           <div className="mb-3 flex items-start justify-between gap-3">
-            {abstained ? (
+            {outcomePresentation && outcome !== "answered" ? (
               <div className="flex flex-wrap items-center gap-2 text-[13px] font-semibold uppercase leading-4 text-[#8d5a4a]">
-                <span>Not enough evidence</span>
+                <span>{outcomePresentation.label}</span>
                 {confidence != null ? (
                   <span className="rounded-sm bg-[#f4d0bf] px-2 py-1 text-[12px] text-[#743f2c]">
-                    Confidence {confidence.toFixed(3)}
+                    Evidence match {confidence.toFixed(3)}
                   </span>
                 ) : null}
               </div>
+            ) : abstained ? (
+              <span className="text-[13px] font-semibold uppercase text-[#8d5a4a]">Historical abstention</span>
             ) : (
               <span aria-hidden="true" />
             )}
@@ -1561,303 +1723,42 @@ function AssistantMessage({
           <MarkdownContent
             content={message.content}
             onSelectSource={onSelectSource}
-            sources={message.sources}
+            sources={citedSources}
           />
+          {outcomePresentation && isAbstentionOutcome(outcome) ? (
+            <p className="mt-4 text-[14px] leading-6 text-[#743f2c]">
+              {outcomePresentation.explanation}
+            </p>
+          ) : null}
         </article>
 
-        {message.sources?.length ? (
+        {citedSources.length ? (
           <div className="mt-4 flex flex-wrap items-center gap-3">
             <span className="text-[13px] font-semibold uppercase leading-4 text-[#8f99a8]">
               Sources
             </span>
-            {message.sources.map((source, index) => (
+            {citedSources.map((source) => (
               <SourceChip
                 key={`${source.source}-${source.chunk_index}-${source.score}`}
                 label={source.display_source}
-                number={index + 1}
+                number={source.citation_number}
                 onClick={() => onSelectSource(source)}
                 source={source}
               />
             ))}
           </div>
         ) : null}
+        {unsuccessful && message.sources?.length ? (
+          <details className="mt-4 rounded border border-outline-variant bg-white px-4 py-3">
+            <summary className="cursor-pointer text-[13px] font-semibold uppercase text-[#7b8492]">Retrieved evidence — not validated as answer support ({message.sources.length})</summary>
+            <div className="mt-3 flex flex-wrap gap-2">
+              {message.sources.map((source) => <SourceChip key={`${source.source}-${source.chunk_index}-${source.score}`} label={source.display_source} number={source.citation_number} onClick={() => onSelectSource(source)} source={source} />)}
+            </div>
+          </details>
+        ) : null}
       </div>
     </div>
   );
-}
-
-function MarkdownContent({
-  content,
-  onSelectSource,
-  sources,
-}: {
-  content: string;
-  onSelectSource: (source: Source) => void;
-  sources: Source[];
-}) {
-  const normalized = content.replace(/\r\n/g, "\n");
-  const lines = normalized.split("\n");
-  const blocks: React.ReactNode[] = [];
-  let paragraph: string[] = [];
-  let listType: "ordered" | "unordered" | null = null;
-  let listItems: string[] = [];
-
-  const flushParagraph = () => {
-    if (paragraph.length === 0) {
-      return;
-    }
-
-    blocks.push(
-      <p className="whitespace-pre-wrap" key={`p-${blocks.length}`}>
-        {renderInlineLines(
-          paragraph,
-          `p-${blocks.length}`,
-          sources,
-          onSelectSource,
-        )}
-      </p>,
-    );
-    paragraph = [];
-  };
-
-  const flushList = () => {
-    if (!listType || listItems.length === 0) {
-      return;
-    }
-
-    const Tag = listType === "ordered" ? "ol" : "ul";
-    blocks.push(
-      <Tag
-        className={`ml-5 space-y-2 ${
-          listType === "ordered" ? "list-decimal" : "list-disc"
-        }`}
-        key={`list-${blocks.length}`}
-      >
-        {listItems.map((item, index) => (
-          <li key={`${index}-${item}`}>
-            {renderInlineMarkdown(
-              item,
-              `li-${blocks.length}-${index}`,
-              sources,
-              onSelectSource,
-            )}
-          </li>
-        ))}
-      </Tag>,
-    );
-    listType = null;
-    listItems = [];
-  };
-
-  for (let index = 0; index < lines.length; index += 1) {
-    const line = lines[index];
-
-    if (line.match(/^```/)) {
-      flushParagraph();
-      flushList();
-
-      const codeLines: string[] = [];
-      index += 1;
-      while (index < lines.length && !lines[index].match(/^```/)) {
-        codeLines.push(lines[index]);
-        index += 1;
-      }
-
-      blocks.push(
-        <pre
-          className="overflow-x-auto rounded border border-outline-variant bg-surface-container-lowest p-3 text-[14px] leading-6 text-[#151a18]"
-          key={`code-${blocks.length}`}
-        >
-          <code>{codeLines.join("\n")}</code>
-        </pre>,
-      );
-      continue;
-    }
-
-    if (line.trim() === "") {
-      flushParagraph();
-      flushList();
-      continue;
-    }
-
-    const nextLine = lines[index + 1];
-    if (
-      line.includes("|") &&
-      nextLine &&
-      /^\s*\|?\s*:?-{3,}/.test(nextLine) &&
-      nextLine.includes("|")
-    ) {
-      flushParagraph();
-      flushList();
-      const splitRow = (row: string) =>
-        row
-          .trim()
-          .replace(/^\|/, "")
-          .replace(/\|$/, "")
-          .split("|")
-          .map((cell) => cell.trim());
-      const headers = splitRow(line);
-      const rows: string[][] = [];
-      index += 2;
-      while (index < lines.length && lines[index].includes("|")) {
-        rows.push(splitRow(lines[index]));
-        index += 1;
-      }
-      index -= 1;
-      blocks.push(
-        <div className="overflow-x-auto rounded border border-outline-variant" key={`table-${blocks.length}`}>
-          <table className="min-w-full border-collapse text-left text-[14px] leading-5">
-            <thead className="bg-surface-container-low">
-              <tr>
-                {headers.map((header, column) => (
-                  <th className="whitespace-nowrap border-b border-outline-variant px-3 py-2 font-bold" key={column} scope="col">
-                    {renderInlineMarkdown(header, `th-${blocks.length}-${column}`, sources, onSelectSource)}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-outline-variant/70 bg-white">
-              {rows.map((row, rowIndex) => (
-                <tr key={rowIndex}>
-                  {headers.map((_, column) => (
-                    <td className="whitespace-nowrap px-3 py-2" key={column}>
-                      {renderInlineMarkdown(row[column] ?? "", `td-${blocks.length}-${rowIndex}-${column}`, sources, onSelectSource)}
-                    </td>
-                  ))}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>,
-      );
-      continue;
-    }
-
-    const unorderedMatch = line.match(/^\s*[-*]\s+(.+)$/);
-    const orderedMatch = line.match(/^\s*\d+[.)]\s+(.+)$/);
-    if (unorderedMatch || orderedMatch) {
-      flushParagraph();
-      const nextType = orderedMatch ? "ordered" : "unordered";
-      if (listType && listType !== nextType) {
-        flushList();
-      }
-      listType = nextType;
-      listItems.push((orderedMatch ?? unorderedMatch)?.[1] ?? "");
-      continue;
-    }
-
-    if (listType && /^\s{2,}\S/.test(line) && listItems.length > 0) {
-      listItems[listItems.length - 1] += ` ${line.trim()}`;
-      continue;
-    }
-
-    flushList();
-    paragraph.push(line);
-  }
-
-  flushParagraph();
-  flushList();
-
-  return <div className="space-y-4">{blocks}</div>;
-}
-
-function renderInlineLines(
-  lines: string[],
-  keyPrefix: string,
-  sources: Source[],
-  onSelectSource: (source: Source) => void,
-) {
-  return lines.flatMap((line, index) => [
-    index > 0 ? <br key={`${keyPrefix}-br-${index}`} /> : null,
-    ...renderInlineMarkdown(
-      line,
-      `${keyPrefix}-${index}`,
-      sources,
-      onSelectSource,
-    ),
-  ]);
-}
-
-function renderInlineMarkdown(
-  text: string,
-  keyPrefix: string,
-  sources: Source[],
-  onSelectSource: (source: Source) => void,
-) {
-  const parts = text.split(
-    /(`[^`]+`|\*\*[^*]+\*\*|__[^_]+__|\*[^*]+\*|_[^_]+_|\[\d+(?:\s*,\s*\d+)*\])/g,
-  );
-
-  return parts.map((part, index) => {
-    const key = `${keyPrefix}-${index}`;
-    const citation = part.match(/^\[([\d,\s]+)\]$/);
-    if (citation) {
-      const citationNumbers = citation[1]
-        .split(",")
-        .map((value) => Number(value.trim()))
-        .filter((value) => Number.isInteger(value) && sources[value - 1]);
-      if (citationNumbers.length) {
-        return (
-          <span className="mx-0.5 inline-flex items-baseline gap-0.5" key={key}>
-            <span aria-hidden="true">[</span>
-            {citationNumbers.map((number, citationIndex) => {
-              const source = sources[number - 1];
-              return (
-                <Fragment key={number}>
-                  {citationIndex > 0 ? <span aria-hidden="true">, </span> : null}
-                  <button
-                    aria-label={`Open source ${number}: ${source.display_source}`}
-                    className="inline-flex min-h-7 min-w-5 items-center justify-center rounded bg-[#edf8f1] px-1 align-baseline text-[0.8em] font-bold text-primary underline decoration-primary/40 underline-offset-2 hover:bg-[#dcefe4]"
-                    onClick={() => onSelectSource(source)}
-                    type="button"
-                  >
-                    {number}
-                  </button>
-                </Fragment>
-              );
-            })}
-            <span aria-hidden="true">]</span>
-          </span>
-        );
-      }
-    }
-    if (part.startsWith("`") && part.endsWith("`") && part.length > 1) {
-      return (
-        <code
-          className="rounded bg-surface-container-low px-1.5 py-0.5 text-[0.9em]"
-          key={key}
-        >
-          {part.slice(1, -1)}
-        </code>
-      );
-    }
-
-    if (
-      ((part.startsWith("**") && part.endsWith("**")) ||
-        (part.startsWith("__") && part.endsWith("__"))) &&
-      part.length > 4
-    ) {
-      return (
-        <strong key={key}>
-          {renderInlineMarkdown(part.slice(2, -2), `${key}-strong`, sources, onSelectSource)}
-        </strong>
-      );
-    }
-
-    if (
-      ((part.startsWith("*") && part.endsWith("*")) ||
-        (part.startsWith("_") && part.endsWith("_"))) &&
-      part.length > 2
-    ) {
-      return (
-        <em key={key}>
-          {renderInlineMarkdown(part.slice(1, -1), `${key}-em`, sources, onSelectSource)}
-        </em>
-      );
-    }
-
-    return part;
-  });
 }
 
 function SourceChip({
@@ -1867,18 +1768,18 @@ function SourceChip({
   source,
 }: {
   label: string;
-  number: number;
+  number: number | null;
   onClick: () => void;
   source: Source;
 }) {
   return (
     <button
-      aria-label={`Source ${number}: ${label}, ${pageRange(source)}`}
+      aria-label={`Source ${number ?? "citation"}: ${label}, ${pageRange(source)}`}
       className="grid min-h-11 max-w-full grid-cols-[auto_minmax(0,1fr)] items-center gap-x-2 rounded-sm border border-[#dfbaa9] bg-tertiary-fixed px-3 py-2 text-left text-[14px] leading-4 text-on-tertiary-fixed transition hover:bg-[#f4d0bf] sm:inline-flex"
       onClick={onClick}
       type="button"
     >
-      <span className="grid h-6 min-w-6 shrink-0 place-items-center rounded-full bg-white/70 text-[12px] font-bold">{number}</span>
+      <span className="grid h-6 min-w-6 shrink-0 place-items-center rounded-full bg-white/70 text-[12px] font-bold">{number ?? "—"}</span>
       <span className="min-w-0 truncate font-semibold">{label}</span>
       <span className="col-start-2 text-[12px] opacity-75 sm:col-auto sm:shrink-0">
         {pageRange(source)} · {evidenceRoleLabel(source)}
@@ -1895,7 +1796,7 @@ function TypingIndicator() {
       </div>
       <div className="inline-flex w-fit items-center gap-3 rounded-lg border border-[#d9dee4] bg-white px-5 py-4 text-[15px] font-semibold text-[#626b79] shadow-tonal">
         <Loader2 className="h-4 w-4 animate-spin" />
-        Looking through the document library…
+        Searching and analyzing the documents…
       </div>
     </div>
   );
@@ -1915,13 +1816,9 @@ function DebugDetails({ searchQuery }: { searchQuery: string }) {
 function ChatInput({
   disabled,
   onSend,
-  setTopK,
-  topK,
 }: {
   disabled: boolean;
   onSend: (message: string) => Promise<boolean>;
-  setTopK: (value: number) => void;
-  topK: number;
 }) {
   const [value, setValue] = useState("");
   const canSend = value.trim().length > 0 && !disabled;
@@ -1944,19 +1841,6 @@ function ChatInput({
           className="flex min-h-[72px] items-center gap-3 rounded-lg border border-[#d9dee4] bg-white px-4 py-2.5 shadow-tonal sm:gap-4 sm:px-5"
           onSubmit={handleSubmit}
         >
-          <div className="hidden items-center gap-2 rounded border border-outline-variant px-3 py-2 text-[13px] font-semibold text-[#4e5966] sm:flex">
-            <Search className="h-4 w-4" />
-            <label htmlFor="top-k" title="How many source excerpts the assistant should retrieve">Sources</label>
-            <input
-              className="h-7 w-12 rounded border border-outline-variant px-2 text-center"
-              id="top-k"
-              max={20}
-              min={1}
-              onChange={(event) => setTopK(Number(event.target.value))}
-              type="number"
-              value={topK}
-            />
-          </div>
           <textarea
             aria-label="Chat prompt"
             className="max-h-40 min-h-11 min-w-0 flex-1 resize-y border-0 bg-transparent py-1.5 text-[17px] leading-7 text-on-surface placeholder:text-[#6e7787] focus:outline-none sm:text-[19px]"

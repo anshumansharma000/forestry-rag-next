@@ -39,6 +39,11 @@ import {
   RetryUpdate,
 } from "../../lib/document-retry";
 import { DocumentStatus } from "./document-status";
+import { LegalReview } from "./legal-review";
+import {
+  AnnotatedDocument, canReviewLegalMetadata, filterLegalPage, InstrumentType,
+  instrumentTypes, LegalProfile, LegalReviewStatus, listLegalProfiles, joinLegalProfiles,
+} from "../../lib/legal";
 
 const DOCUMENT_TYPES = [
   "rules",
@@ -81,6 +86,13 @@ export default function DocumentsPage() {
   const [error, setError] = useState<string | null>(null);
   const [retryKey, setRetryKey] = useState(0);
   const [retryStates, setRetryStates] = useState<Record<string, RetryUpdate>>({});
+  const [legalProfiles, setLegalProfiles] = useState<Record<string, LegalProfile>>({});
+  const [legalNamespace, setLegalNamespace] = useState<string | null>(null);
+  const [legalError, setLegalError] = useState<string | null>(null);
+  const [legalAnnotationsReady, setLegalAnnotationsReady] = useState(false);
+  const [instrumentFilter, setInstrumentFilter] = useState<InstrumentType | "">("");
+  const [reviewFilter, setReviewFilter] = useState<LegalReviewStatus | "" | "needs_review">("");
+  const [legalDocument, setLegalDocument] = useState<DocumentLibraryItem | null>(null);
   const authRef = useRef<AuthState | null>(null);
   const dataRef = useRef<DocumentLibraryResponse | null>(null);
   const retryProcessorRef = useRef<DocumentRetryProcessor | null>(null);
@@ -142,6 +154,23 @@ export default function DocumentsPage() {
   }, []);
 
   useEffect(() => () => retryProcessorRef.current?.stop(), []);
+
+  useEffect(() => {
+    if (!auth || !canReviewLegalMetadata(auth.user.role)) return;
+    const controller = new AbortController(); let active = true;
+    void (async () => {
+      try {
+        const nextAuth = await ensureFreshAuth(authRef.current ?? auth); if (!active) return;
+        authRef.current = nextAuth; setAuth(nextAuth);
+        const response = await listLegalProfiles(nextAuth.access_token, controller.signal); if (!active) return;
+        setLegalProfiles(response.profiles ?? {}); setLegalNamespace(response.namespace); setLegalError(null); setLegalAnnotationsReady(true);
+      } catch (err) {
+        if (!active || (err instanceof DOMException && err.name === "AbortError")) return;
+        setLegalAnnotationsReady(false); setLegalError(formatApiError(err, "Legal annotations are unavailable. The document library is still usable."));
+      }
+    })();
+    return () => { active = false; controller.abort(); };
+  }, [auth?.user.id, auth?.user.role, retryKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (searchInput === (query.search ?? "")) return;
@@ -272,6 +301,9 @@ export default function DocumentsPage() {
     data?.items.length ?? 0,
     data?.pagination.total ?? 0,
   );
+  const legalAdmin = canReviewLegalMetadata(auth?.user.role);
+  const annotatedDocuments = data ? joinLegalProfiles(data.items, legalProfiles) : [];
+  const visibleDocuments = legalAdmin && legalAnnotationsReady ? filterLegalPage(annotatedDocuments, instrumentFilter, reviewFilter) : annotatedDocuments;
 
   return (
     <SidebarPageShell activePath="/documents" user={auth?.user ?? null}>
@@ -379,6 +411,11 @@ export default function DocumentsPage() {
           </div>
         </section>
 
+        {legalAdmin ? <section className="mt-4 rounded border border-outline-variant bg-white p-4" aria-label="Legal review filters">
+          <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-center"><div><h2 className="text-sm font-bold text-primary">Legal metadata review</h2><p className="mt-1 text-xs text-[#626b79]">Registry namespace: <strong>{legalNamespace ?? "Unavailable"}</strong>. Legal filters apply only to the {data?.items.length ?? 0} documents loaded on this page.</p></div>{legalAnnotationsReady ? <div className="flex flex-wrap gap-2"><SelectControl label="Instrument type" value={instrumentFilter} onChange={value => setInstrumentFilter(value as InstrumentType | "")}><option value="">All instruments</option>{instrumentTypes.map(value => <option key={value} value={value}>{titleCase(value)}</option>)}</SelectControl><SelectControl label="Review status" value={reviewFilter} onChange={value => setReviewFilter(value as typeof reviewFilter)}><option value="">All review states</option><option value="needs_review">Unreviewed (includes no profile)</option><option value="no_profile">No profile</option><option value="unreviewed">Unreviewed profile</option><option value="reviewed">Reviewed</option></SelectControl><button className="secondary-button" onClick={() => { setInstrumentFilter("unknown"); setReviewFilter(""); }}>Unknown classification</button></div> : null}</div>
+          {legalError ? <p className="mt-3 text-sm text-[#8d3f27]" role="status">{legalError}</p> : null}
+        </section> : null}
+
         {error ? (
           <div className="mt-5 flex flex-col gap-3 rounded border border-[#e6b7a6] bg-[#fff5f1] p-4 text-[#743f2c] sm:flex-row sm:items-center sm:justify-between" role="alert">
             <div className="flex items-start gap-2">
@@ -409,10 +446,12 @@ export default function DocumentsPage() {
             <DocumentSkeleton />
           ) : !data && error ? null : data?.items.length === 0 ? (
             <EmptyState filtered={searchOrFiltersActive} onClear={clearSearchAndFilters} status={query.status} />
+          ) : visibleDocuments.length === 0 ? (
+            <div className="rounded border border-dashed border-outline-variant bg-white p-8 text-center"><h2 className="font-bold">No documents on this page match the legal filters</h2><p className="mt-2 text-sm text-[#626b79]">Clear the page-scoped legal filters or move to another document page.</p></div>
           ) : data ? (
             <>
-              <DocumentTable canRetry={canIngestDocuments(auth?.user.role)} documents={data.items} onRetry={retryDocument} retryStates={retryStates} />
-              <DocumentCards canRetry={canIngestDocuments(auth?.user.role)} documents={data.items} onRetry={retryDocument} retryStates={retryStates} />
+              <DocumentTable canRetry={canIngestDocuments(auth?.user.role)} documents={visibleDocuments} legalAdmin={legalAdmin} legalReady={legalAnnotationsReady} onLegalReview={setLegalDocument} onRetry={retryDocument} retryStates={retryStates} />
+              <DocumentCards canRetry={canIngestDocuments(auth?.user.role)} documents={visibleDocuments} legalAdmin={legalAdmin} legalReady={legalAnnotationsReady} onLegalReview={setLegalDocument} onRetry={retryDocument} retryStates={retryStates} />
             </>
           ) : null}
         </section>
@@ -445,6 +484,7 @@ export default function DocumentsPage() {
           </footer>
         ) : null}
       </div>
+      {legalAdmin && legalDocument && auth ? <LegalReview key={legalDocument.id} document={legalDocument} documents={data?.items ?? []} profile={legalProfiles[legalDocument.id] ?? null} profiles={legalProfiles} token={auth.access_token} onClose={() => setLegalDocument(null)} onOpenOwner={setLegalDocument} onSaved={saved => setLegalProfiles(current => ({ ...current, [legalDocument.id]: saved }))} /> : null}
     </main>
     </SidebarPageShell>
   );
@@ -467,9 +507,12 @@ function SelectControl({ children, grow = false, label, onChange, value }: {
   );
 }
 
-function DocumentTable({ canRetry, documents, onRetry, retryStates }: {
+function DocumentTable({ canRetry, documents, legalAdmin, legalReady, onLegalReview, onRetry, retryStates }: {
   canRetry: boolean;
-  documents: DocumentLibraryItem[];
+  documents: AnnotatedDocument[];
+  legalAdmin: boolean;
+  legalReady: boolean;
+  onLegalReview: (document: DocumentLibraryItem) => void;
   onRetry: (document: DocumentLibraryItem) => void;
   retryStates: Record<string, RetryUpdate>;
 }) {
@@ -484,6 +527,7 @@ function DocumentTable({ canRetry, documents, onRetry, retryStates }: {
               <th className="w-[20%] px-4 py-3 font-bold" scope="col">Authority / year</th>
               <th className="w-[15%] px-4 py-3 font-bold" scope="col">Content</th>
               <th className="w-[22%] px-4 py-3 font-bold" scope="col">Status</th>
+              {legalAdmin ? <th className="w-[24%] px-4 py-3 font-bold" scope="col">Legal review</th> : null}
             </tr>
           </thead>
           <tbody className="divide-y divide-outline-variant">
@@ -497,6 +541,7 @@ function DocumentTable({ canRetry, documents, onRetry, retryStates }: {
                 <td className="px-4 py-4"><AuthorityCell document={document} /></td>
                 <td className="px-4 py-4"><SizeCell document={document} /></td>
                 <td className="px-4 py-4"><DocumentStatus document={document} canRetry={canRetry} onRetry={onRetry} retryState={retryStates[document.filename]} /></td>
+                {legalAdmin ? <td className="px-4 py-4"><LegalCell document={document} ready={legalReady} onReview={() => onLegalReview(document)} /></td> : null}
               </tr>
             ))}
           </tbody>
@@ -506,9 +551,12 @@ function DocumentTable({ canRetry, documents, onRetry, retryStates }: {
   );
 }
 
-function DocumentCards({ canRetry, documents, onRetry, retryStates }: {
+function DocumentCards({ canRetry, documents, legalAdmin, legalReady, onLegalReview, onRetry, retryStates }: {
   canRetry: boolean;
-  documents: DocumentLibraryItem[];
+  documents: AnnotatedDocument[];
+  legalAdmin: boolean;
+  legalReady: boolean;
+  onLegalReview: (document: DocumentLibraryItem) => void;
   onRetry: (document: DocumentLibraryItem) => void;
   retryStates: Record<string, RetryUpdate>;
 }) {
@@ -528,6 +576,7 @@ function DocumentCards({ canRetry, documents, onRetry, retryStates }: {
             <CardDetail label="Status"><DocumentStatus document={document} canRetry={canRetry} onRetry={onRetry} retryState={retryStates[document.filename]} /></CardDetail>
             <CardDetail label="Authority / year"><AuthorityCell document={document} /></CardDetail>
             <CardDetail label="Content"><SizeCell document={document} /></CardDetail>
+            {legalAdmin ? <CardDetail label="Legal review"><LegalCell document={document} ready={legalReady} onReview={() => onLegalReview(document)} /></CardDetail> : null}
           </dl>
         </article>
       ))}
@@ -545,6 +594,12 @@ function AuthorityCell({ document }: { document: DocumentLibraryItem }) {
 
 function SizeCell({ document }: { document: DocumentLibraryItem }) {
   return <div className="text-[13px] leading-5 text-[#4e5966]"><p>{document.page_count == null ? "Page number unavailable" : `${document.page_count.toLocaleString()} ${document.page_count === 1 ? "page" : "pages"}`}</p><p className="text-[12px] text-[#737c88]">{document.chunk_count.toLocaleString()} searchable {document.chunk_count === 1 ? "excerpt" : "excerpts"}</p></div>;
+}
+
+function LegalCell({ document, onReview, ready }: { document: AnnotatedDocument; onReview: () => void; ready: boolean }) {
+  if (!ready) return <span className="text-[12px] text-[#626b79]">Annotations unavailable</span>;
+  const status = document.legalStatus === "no_profile" ? "No profile" : document.legalStatus === "reviewed" ? "Reviewed" : "Unreviewed";
+  return <div className="text-[12px]"><p className="font-bold text-[#414844]">{document.legalProfile?.instrument_type === "unknown" ? "Unknown" : document.legalProfile ? titleCase(document.legalProfile.instrument_type) : "—"}</p><p className="mt-1 text-[#626b79]">{status} · {document.legalProfile?.relationships.length ?? 0} relationships</p><button className="mt-2 min-h-11 font-bold text-primary underline" onClick={onReview}>Open legal review</button></div>;
 }
 
 function CardDetail({ children, label }: { children: React.ReactNode; label: string }) {

@@ -118,7 +118,7 @@ export function SourceDrawer({
               </p>
             </details>
 
-            <details className="mt-4 rounded border border-outline-variant/70 bg-white p-4">
+            <details className="mt-4 rounded border border-outline-variant/70 bg-white p-4" open>
               <summary className="cursor-pointer text-[14px] font-semibold text-primary">
                 Source details
               </summary>
@@ -130,7 +130,7 @@ export function SourceDrawer({
                 ) : null}
                 <DrawerMetric label="Evidence" value={evidenceRoleLabel(source)} />
                 <DrawerMetric label="Excerpt" value={source.chunk_index + 1} />
-                <DrawerMetric label="Match score" value={source.score.toFixed(3)} />
+                <DrawerMetric label="Retrieval score" value={source.score.toFixed(3)} />
               </div>
             </details>
           </div>

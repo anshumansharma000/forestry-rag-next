@@ -44,8 +44,15 @@ export type ConfigValidation = {
 };
 
 export type EvidenceRole = "matched" | "neighbor";
+export type AnswerOutcome =
+  | "answered"
+  | "insufficient_evidence"
+  | "unsupported_answer"
+  | "not_generated";
 
 export type Source = {
+  /** Stable number printed in the answer's inline citation markers. */
+  citation_number: number | null;
   /** Stable backend identifier used for authorized access to the original file. */
   document_id?: string | null;
   source: string;
@@ -62,8 +69,19 @@ export type Source = {
 export type AskResponse = {
   answer: string;
   sources: Source[];
-  confidence: number;
+  /** Sources actually cited by this answer, normalized at the API boundary. */
+  cited_sources: Source[];
+  confidence: number | null;
   abstained: boolean;
+  outcome: AnswerOutcome;
+};
+
+export type ChatAskResponse = AskResponse & {
+  session_id: string;
+  user_message: ChatMessage;
+  assistant_message: ChatMessage;
+  search_query: string;
+  request_id: string;
 };
 
 export type ChatMessage = {
@@ -250,23 +268,27 @@ export class ApiError extends Error {
   status: number;
   code: string;
   details: Record<string, unknown>;
+  retryAfterMs: number | null;
 
   constructor({
     code,
     details,
     message,
     status,
+    retryAfterMs,
   }: {
     code: string;
     details?: Record<string, unknown>;
     message: string;
     status: number;
+    retryAfterMs?: number | null;
   }) {
     super(message);
     this.name = "ApiError";
     this.code = code;
     this.details = details ?? {};
     this.status = status;
+    this.retryAfterMs = retryAfterMs ?? null;
   }
 }
 
@@ -350,6 +372,14 @@ async function readError(response: Response) {
   };
 }
 
+export function parseRetryAfter(value: string | null, now = Date.now()) {
+  if (!value) return null;
+  const seconds = Number(value);
+  if (Number.isFinite(seconds) && seconds >= 0) return seconds * 1000;
+  const date = Date.parse(value);
+  return Number.isNaN(date) ? null : Math.max(0, date - now);
+}
+
 export async function apiRequest<T>(
   path: string,
   { token, ...init }: RequestOptions = {},
@@ -369,7 +399,11 @@ export async function apiRequest<T>(
 
   if (!response.ok) {
     const error = await readError(response);
-    throw new ApiError({ ...error, status: response.status });
+    throw new ApiError({
+      ...error,
+      status: response.status,
+      retryAfterMs: parseRetryAfter(response.headers.get("Retry-After")),
+    });
   }
 
   if (response.status === 204) {
@@ -474,32 +508,59 @@ export async function downloadSourceDocument(
   return response.blob();
 }
 
-export function ask(token: string, question: string, topK?: number) {
-  return apiRequest<AskResponse>("/ask", {
-    method: "POST",
-    token,
-    body: JSON.stringify({ question, top_k: topK }),
-  });
+type LegacyAskResponse = Omit<AskResponse, "cited_sources"> & {
+  cited_sources?: Source[];
+};
+
+function normalizeAskResponse<T extends LegacyAskResponse>(response: T): T & AskResponse {
+  return {
+    ...response,
+    cited_sources: Array.isArray(response.cited_sources)
+      ? response.cited_sources
+      : [],
+  };
 }
 
-export function askSession(
+function adaptiveRequestBody(key: "question" | "message", value: string, topK?: number) {
+  if (topK != null && (!Number.isInteger(topK) || topK < 1 || topK > 20)) {
+    throw new RangeError("top_k diagnostic override must be an integer from 1 through 20.");
+  }
+  return topK == null ? { [key]: value } : { [key]: value, top_k: topK };
+}
+
+export async function ask(
+  token: string,
+  question: string,
+  topK?: number,
+  signal?: AbortSignal,
+) {
+  const response = await apiRequest<LegacyAskResponse>("/ask", {
+    method: "POST",
+    token,
+    signal,
+    body: JSON.stringify(adaptiveRequestBody("question", question, topK)),
+  });
+  return normalizeAskResponse(response);
+}
+
+export async function askSession(
   token: string,
   sessionId: string,
   message: string,
+  requestId: string,
   topK?: number,
+  signal?: AbortSignal,
 ) {
-  return apiRequest<
-    AskResponse & {
-      session_id: string;
-      user_message: ChatMessage;
-      assistant_message: ChatMessage;
-      search_query: string;
-    }
-  >(`/chat/sessions/${encodeURIComponent(sessionId)}/ask`, {
+  const response = await apiRequest<Omit<ChatAskResponse, "cited_sources"> & { cited_sources?: Source[] }>(`/chat/sessions/${encodeURIComponent(sessionId)}/ask`, {
     method: "POST",
     token,
-    body: JSON.stringify({ message, top_k: topK }),
+    signal,
+    body: JSON.stringify({
+      ...adaptiveRequestBody("message", message, topK),
+      request_id: requestId,
+    }),
   });
+  return normalizeAskResponse(response);
 }
 
 export function deleteSession(token: string, sessionId: string) {
@@ -598,11 +659,11 @@ export function listDocuments(
   });
 }
 
-export function startIngest(token: string, source: string) {
+export function startIngest(token: string, source?: string) {
   return apiRequest<{ job: IngestJob }>("/ingest", {
     method: "POST",
     token,
-    body: JSON.stringify({ source }),
+    body: JSON.stringify(source ? { source } : {}),
   });
 }
 

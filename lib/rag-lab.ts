@@ -1,6 +1,6 @@
 "use client";
 
-import { apiRequest, IngestJob } from "./api";
+import { apiRequest, AnswerOutcome, IngestJob, Source } from "./api";
 import type { Role } from "./api";
 
 export type RagLabChunkingConfig = {
@@ -43,19 +43,16 @@ export type RagLabChunk = {
   section_heading: string | null; page_start: number | null; page_end: number | null; token_estimate: number;
   content?: string; metadata: Record<string, unknown>;
 };
-export type RagSource = {
-  source: string; display_source: string; page_start: number | null; page_end: number | null; chunk_index: number;
-  section_heading: string | null; score: number; evidence_role: "matched" | "neighbor"; text: string;
-};
+export type RagSource = Source;
 export type RagLabTrial = {
   id: string; revision_id: string; actor_user_id: string | null; question: string; retrieval_config: RagLabRetrievalConfig;
-  answer: string; sources: RagSource[]; confidence: number | null; abstained: boolean; latency_ms: number | null; created_at: string;
+  answer: string; sources: RagSource[]; cited_sources: RagSource[]; confidence: number | null; abstained: boolean; outcome?: AnswerOutcome; latency_ms: number | null; created_at: string;
 };
 export type Pagination = { offset: number; limit: number; total: number; has_more: boolean };
 export type RagLabExperimentListResponse = { items: RagLabExperiment[]; pagination: Pagination };
 export type RagLabExperimentDetailResponse = { experiment: RagLabExperiment; files: RagLabFile[]; revisions: RagLabRevision[] };
 export type RagLabChunkListResponse = { items: RagLabChunk[]; pagination: Pagination };
-export type RagLabQueryResponse = { trial: RagLabTrial; answer: string; sources: RagSource[]; confidence: number; latency_ms: number };
+export type RagLabQueryResponse = { trial: RagLabTrial; answer: string; sources: RagSource[]; cited_sources: RagSource[]; confidence: number | null; abstained: boolean; outcome: AnswerOutcome; latency_ms: number };
 
 export const defaultRagLabConfig: RagLabConfig = {
   chunking: { strategy: "structure_aware_v1", profile: "auto", max_tokens: 600, overlap_tokens: 100 },
@@ -127,8 +124,38 @@ export const updateRagLabExperiment = async (token: string, id: string, payload:
 export const uploadRagLabFiles = (token: string, id: string, files: File[]) => apiRequest<unknown>(`/admin/rag-lab/experiments/${enc(id)}/files`, { method: "POST", token, body: makeRagLabUpload(files) });
 export const createRagLabRevision = (token: string, id: string, config: RagLabConfig) => apiRequest<{ revision: RagLabRevision; job: IngestJob }>(`/admin/rag-lab/experiments/${enc(id)}/revisions`, { method: "POST", token, body: JSON.stringify({ config }) });
 export const listRagLabChunks = (token: string, revisionId: string, offset = 0, limit = 50, signal?: AbortSignal) => apiRequest<RagLabChunkListResponse>(`/admin/rag-lab/revisions/${enc(revisionId)}/chunks?offset=${offset}&limit=${limit}&include_content=true`, { token, signal });
-export const queryRagLabRevision = (token: string, revisionId: string, question: string, retrieval: RagLabRetrievalConfig) => apiRequest<RagLabQueryResponse>(`/admin/rag-lab/revisions/${enc(revisionId)}/query`, { method: "POST", token, body: JSON.stringify({ question, retrieval }) });
-export const listRagLabTrials = (token: string, revisionId: string, signal?: AbortSignal) => apiRequest<{ items: RagLabTrial[] }>(`/admin/rag-lab/revisions/${enc(revisionId)}/queries?limit=50`, { token, signal });
+type LegacyRagLabTrial = Omit<RagLabTrial, "cited_sources"> & { cited_sources?: RagSource[] };
+type LegacyRagLabQueryResponse = Omit<RagLabQueryResponse, "trial" | "cited_sources"> & {
+  trial: LegacyRagLabTrial;
+  cited_sources?: RagSource[];
+};
+
+const normalizeTrial = (trial: LegacyRagLabTrial): RagLabTrial => ({
+  ...trial,
+  cited_sources: Array.isArray(trial.cited_sources) ? trial.cited_sources : [],
+});
+
+export const queryRagLabRevision = async (token: string, revisionId: string, question: string, retrieval: RagLabRetrievalConfig, signal?: AbortSignal) => {
+  const response = await apiRequest<LegacyRagLabQueryResponse>(`/admin/rag-lab/revisions/${enc(revisionId)}/query`, { method: "POST", token, signal, body: JSON.stringify({ question, retrieval }) });
+  const citedSources = Array.isArray(response.cited_sources)
+    ? response.cited_sources
+    : Array.isArray(response.trial.cited_sources)
+      ? response.trial.cited_sources
+      : [];
+  return {
+    ...response,
+    cited_sources: citedSources,
+    trial: {
+      ...normalizeTrial(response.trial),
+      outcome: response.trial.outcome ?? response.outcome,
+      cited_sources: citedSources,
+    },
+  } satisfies RagLabQueryResponse;
+};
+export const listRagLabTrials = async (token: string, revisionId: string, signal?: AbortSignal) => {
+  const response = await apiRequest<{ items: LegacyRagLabTrial[] }>(`/admin/rag-lab/revisions/${enc(revisionId)}/queries?limit=50`, { token, signal });
+  return { items: response.items.map(normalizeTrial) };
+};
 export const publishRagLabRevision = (token: string, revisionId: string) => apiRequest<{ job: IngestJob }>(`/admin/rag-lab/revisions/${enc(revisionId)}/publish`, { method: "POST", token });
 
 export type PollUpdate = { state: "queued" | "running" | "reconnecting" | "succeeded" | "failed"; job?: IngestJob; error?: string };

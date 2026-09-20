@@ -2,6 +2,14 @@ import type { IngestJob } from "./api";
 
 export type ActiveIngestJob = { jobId: string; filename: string };
 
+export function successfulIngestDetail(job: IngestJob) {
+  if (job.status !== "succeeded" || !job.result) return undefined;
+  if (job.result.documents_added === 0 && job.result.documents_skipped > 0) {
+    return `${job.result.documents_skipped} unchanged ${job.result.documents_skipped === 1 ? "document was" : "documents were"} skipped successfully.`;
+  }
+  return undefined;
+}
+
 type Timer = ReturnType<typeof setTimeout>;
 
 const INITIAL_POLL_DELAY_MS = 5_000;

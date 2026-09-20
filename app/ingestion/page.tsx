@@ -49,6 +49,7 @@ import {
 import {
   IngestJobPoller,
   readActiveJobs,
+  successfulIngestDetail,
   writeActiveJobs,
 } from "../../lib/ingestion-polling";
 
@@ -192,7 +193,7 @@ function activityMessage(filename: string, job: IngestJob) {
     case "running":
       return `${filename} is being prepared for search.`;
     case "succeeded":
-      return `${filename} is ready for chat.`;
+      return successfulIngestDetail(job) ?? `${filename} is ready for chat.`;
     case "failed":
       return `${filename} could not be processed: ${job.error || "Document processing failed."}`;
   }
@@ -452,7 +453,7 @@ export default function IngestionPage() {
                       : job.status === "succeeded"
                         ? "indexed"
                         : job.status,
-                  detail: job.status === "failed" ? job.error || "Document processing failed." : undefined,
+                  detail: job.status === "failed" ? job.error || "Document processing failed." : successfulIngestDetail(job),
                   chunks: job.status === "succeeded" ? job.result?.chunks_added ?? job.result?.chunks : undefined,
                   failureStage: job.status === "failed" ? "ingestion" : undefined,
                   jobProgress: jobProgress(job),
@@ -806,6 +807,14 @@ export default function IngestionPage() {
 
         {error ? <Banner tone="error" message={error} /> : null}
         {notice ? <Banner tone="success" message={notice} /> : null}
+        {canManage ? (
+          <div className="mt-5 rounded border border-[#e0cfa9] bg-[#fff9e9] px-4 py-3 text-[14px] leading-6 text-[#6c551d]" role="status">
+            <strong>Index version 4:</strong> after this backend release, every
+            existing document must be fully re-ingested. Deployment alone does
+            not re-embed documents; re-run the existing ingestion flow for each
+            document and wait for every job to succeed.
+          </div>
+        ) : null}
 
         {loading ? (
           <div className="mt-6 flex items-center gap-3 rounded border border-outline-variant bg-white px-4 py-4 shadow-tonal">

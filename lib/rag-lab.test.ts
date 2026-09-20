@@ -63,6 +63,13 @@ const job = (status: IngestJob["status"], error: string | null = null): IngestJo
 });
 
 describe("job polling", () => {
+  it("continues when a recovered build moves from running back to queued", async () => {
+    vi.useFakeTimers(); const updates: string[] = [];
+    const poller = new RagLabJobPoller(vi.fn().mockResolvedValueOnce(job("running")).mockResolvedValueOnce(job("queued")).mockResolvedValueOnce(job("succeeded")), update => updates.push(update.state), 10);
+    const done = poller.start("job"); await vi.advanceTimersByTimeAsync(30); await done;
+    expect(updates).toEqual(["running", "queued", "succeeded"]);
+  });
+
   it("reports a failed build and retains the backend error", async () => {
     vi.useFakeTimers(); const updates: string[] = [];
     const poller = new RagLabJobPoller(vi.fn().mockResolvedValueOnce(job("running")).mockResolvedValueOnce(job("failed", "Parser failed")), update => updates.push(`${update.state}:${update.job?.error ?? ""}`), 10);
@@ -78,8 +85,19 @@ describe("job polling", () => {
 });
 
 describe("citations and publication safety", () => {
+  it("keeps historical trials without fabricating an outcome", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ items: [{
+      id: "old", revision_id: "revision", actor_user_id: null, question: "Old?",
+      retrieval_config: defaultRagLabConfig.retrieval, answer: "Old answer", sources: [],
+      confidence: null, abstained: false, latency_ms: null, created_at: "2025-01-01",
+    }] }), { status: 200 })));
+    const { listRagLabTrials } = await import("./rag-lab");
+    const result = await listRagLabTrials("token", "revision");
+    expect(result.items[0].outcome).toBeUndefined();
+  });
+
   it("formats complete citation evidence and requires explicit confirmation copy", () => {
-    expect(ragSourceLabel({ source: "a", display_source: "Forest Rules", page_start: 2, page_end: 4, chunk_index: 3, section_heading: "Approval", score: .8, evidence_role: "matched", text: "Evidence" })).toBe("Forest Rules · Pages 2–4 · Approval");
+    expect(ragSourceLabel({ citation_number: 1, document_id: "doc", source: "a", display_source: "Forest Rules", page_start: 2, page_end: 4, chunk_index: 3, section_heading: "Approval", score: .8, evidence_role: "matched", text: "Evidence" })).toBe("Forest Rules · Pages 2–4 · Approval");
     expect(PUBLISH_CONFIRMATION_POINTS.join(" ")).toContain("no unpublish or rollback");
     expect(PUBLISH_CONFIRMATION_POINTS.join(" ")).toContain("regular chat");
   });

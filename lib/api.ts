@@ -1,5 +1,7 @@
 "use client";
 
+import type { CategorizationInput, DocumentCategorization, DocumentCategory } from "./document-categorization";
+
 export const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_BASE_URL?.replace(/\/$/, "") ??
   "http://127.0.0.1:8000";
@@ -215,6 +217,7 @@ export type CompletedUpload = {
   status: "ok";
   filename: string;
   path: string;
+  categorization?: DocumentCategorization | null;
 };
 
 export type DocumentLibraryItem = {
@@ -233,6 +236,7 @@ export type DocumentLibraryItem = {
   ingested_at: string | null;
   created_at: string | null;
   updated_at: string | null;
+  categorization?: DocumentCategorization | null;
 };
 
 export type DocumentLibraryResponse = {
@@ -250,6 +254,7 @@ export type DocumentLibraryParams = {
   search?: string;
   kind?: "pdf" | "docx" | "txt" | "ppt" | "pptx";
   document_type?: string;
+  category?: DocumentCategory;
   year?: string;
   sort_by: "updated_at" | "created_at" | "title" | "source" | "page_count";
   sort_order: "asc" | "desc";
@@ -581,10 +586,11 @@ export function deleteMessage(
   );
 }
 
-export function uploadDocument(token: string, file: File) {
+export function uploadDocument(token: string, file: File, categorization?: CategorizationInput) {
   const formData = new FormData();
   formData.append("file", file);
-  return apiRequest<{ status: "ok"; filename: string; path: string }>(
+  if (categorization) formData.append("categorization", JSON.stringify(categorization));
+  return apiRequest<CompletedUpload>(
     "/documents/upload",
     {
       method: "POST",
@@ -594,14 +600,15 @@ export function uploadDocument(token: string, file: File) {
   );
 }
 
-export function uploadDocuments(token: string, files: File[]) {
+export function uploadDocuments(token: string, files: File[], categorizations?: Record<string, CategorizationInput>) {
   const formData = new FormData();
   for (const file of files) {
     formData.append("files", file);
   }
+  if (categorizations && Object.keys(categorizations).length) formData.append("categorizations", JSON.stringify(categorizations));
   return apiRequest<{
     status: "ok";
-    files: { status: "ok"; filename: string; path: string }[];
+    files: CompletedUpload[];
   }>("/documents/uploads", {
     method: "POST",
     token,
@@ -625,7 +632,7 @@ export function presignDocumentUploads(
 
 export function completeDocumentUploads(
   token: string,
-  uploads: Pick<PresignedUpload, "upload_id" | "filename">[],
+  uploads: Array<Pick<PresignedUpload, "upload_id" | "filename"> & { categorization?: CategorizationInput }>,
 ) {
   return apiRequest<{
     status: "ok";
@@ -647,6 +654,7 @@ export function listDocuments(
   if (params.search?.trim()) query.set("search", params.search.trim());
   if (params.kind) query.set("kind", params.kind);
   if (params.document_type) query.set("document_type", params.document_type);
+  if (params.category) query.set("category", params.category);
   if (params.year) query.set("year", params.year);
   query.set("sort_by", params.sort_by);
   query.set("sort_order", params.sort_order);

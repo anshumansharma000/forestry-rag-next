@@ -1,4 +1,5 @@
 import type { CompletedUpload, IngestJob, PresignedUpload } from "./api";
+import type { CategorizationInput } from "./document-categorization";
 
 export const SUPPORTED_DOCUMENT_EXTENSIONS = [
   "pdf",
@@ -57,6 +58,7 @@ export type DocumentFlowStatus =
 export type UploadFlowFile = {
   key: string;
   file: File;
+  categorization?: CategorizationInput;
 };
 
 export type UploadFlowUpdate = {
@@ -75,7 +77,7 @@ export type UploadFlowDependencies = {
     file: File,
     onProgress: (percentage: number) => void,
   ) => Promise<void>;
-  complete: (upload: PresignedUpload) => Promise<CompletedUpload>;
+  complete: (upload: PresignedUpload, categorization?: CategorizationInput) => Promise<CompletedUpload>;
   startIngest: (source: string) => Promise<IngestJob>;
   onUpdate: (key: string, update: UploadFlowUpdate) => void;
   errorMessage: (error: unknown, fallback: string) => string;
@@ -199,7 +201,9 @@ export async function processDocumentUploads(
       let completed: CompletedUpload;
       try {
         onUpdate(item.key, { status: "finalizing", uploadProgress: 100 });
-        completed = await complete(upload);
+        completed = item.categorization
+          ? await complete(upload, item.categorization)
+          : await complete(upload);
       } catch (error) {
         onUpdate(item.key, {
           status: "failed",

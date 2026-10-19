@@ -13,6 +13,9 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { SidebarPageShell } from "../../components/app-sidebar";
+import { useDocumentCategories } from "../../components/categorization-fields";
+import { DocumentMetadataReview } from "../../components/document-metadata-review";
+import { categoryLabel, DocumentCategory } from "../../lib/document-categorization";
 import { ensureFreshAuth, formatApiError, loadStoredSession } from "../../lib/auth-client";
 import {
   AuthState,
@@ -93,6 +96,8 @@ export default function DocumentsPage() {
   const [instrumentFilter, setInstrumentFilter] = useState<InstrumentType | "">("");
   const [reviewFilter, setReviewFilter] = useState<LegalReviewStatus | "" | "needs_review">("");
   const [legalDocument, setLegalDocument] = useState<DocumentLibraryItem | null>(null);
+  const [metadataDocument, setMetadataDocument] = useState<DocumentLibraryItem | null>(null);
+  const categoryCatalog = useDocumentCategories(auth?.access_token);
   const authRef = useRef<AuthState | null>(null);
   const dataRef = useRef<DocumentLibraryResponse | null>(null);
   const retryProcessorRef = useRef<DocumentRetryProcessor | null>(null);
@@ -153,6 +158,17 @@ export default function DocumentsPage() {
     };
   }, []);
 
+  const getMetadataToken = useCallback(async () => {
+    const nextAuth = await ensureFreshAuth(authRef.current);
+    authRef.current = nextAuth;
+    setAuth(nextAuth);
+    return nextAuth.access_token;
+  }, []);
+
+  useEffect(() => {
+    if (categoryCatalog.status === "unavailable" && query.category) commitQuery({ category: undefined, offset: 0 }, true);
+  }, [categoryCatalog.status, commitQuery, query.category]);
+
   useEffect(() => () => retryProcessorRef.current?.stop(), []);
 
   useEffect(() => {
@@ -195,7 +211,7 @@ export default function DocumentsPage() {
         if (!active) return;
         authRef.current = nextAuth;
         setAuth(nextAuth);
-        const response = await listDocuments(nextAuth.access_token, query, controller.signal);
+        const response = await listDocuments(nextAuth.access_token, { ...query, category: categoryCatalog.status === "available" ? query.category : undefined }, controller.signal);
         if (!active) return;
 
         if (response.items.length === 0 && response.pagination.total > 0 && query.offset > 0) {
@@ -228,7 +244,7 @@ export default function DocumentsPage() {
       active = false;
       controller.abort();
     };
-  }, [auth, commitQuery, query, retryKey]);
+  }, [auth, categoryCatalog.status, commitQuery, query, retryKey]);
 
   const setControl = (update: Partial<DocumentLibraryQuery>) =>
     commitQuery({ ...update, offset: 0 });
@@ -278,7 +294,7 @@ export default function DocumentsPage() {
   const clearFilters = () =>
     {
       setYearInput("");
-      setControl({ kind: undefined, document_type: undefined, year: undefined });
+      setControl({ kind: undefined, document_type: undefined, category: undefined, year: undefined });
     };
 
   const clearSearchAndFilters = () => {
@@ -289,12 +305,13 @@ export default function DocumentsPage() {
       search: "",
       kind: undefined,
       document_type: undefined,
+      category: undefined,
       year: undefined,
       offset: 0,
     }));
   };
 
-  const filtersActive = Boolean(query.kind || query.document_type || query.year);
+  const filtersActive = Boolean(query.kind || query.document_type || query.category || query.year);
   const searchOrFiltersActive = Boolean(query.search || filtersActive);
   const bounds = pageBounds(
     data?.pagination.offset ?? query.offset,
@@ -368,6 +385,11 @@ export default function DocumentsPage() {
                 <option value="">All document types</option>
                 {DOCUMENT_TYPES.map((type) => <option key={type} value={type}>{titleCase(type)}</option>)}
               </SelectControl>
+              <SelectControl label="Category" value={query.category ?? ""} disabled={categoryCatalog.status !== "available"}
+                onChange={value => setControl({ category: (value || undefined) as DocumentCategory | undefined })}>
+                <option value="">All categories</option>
+                {categoryCatalog.categories.map(option => <option value={option.value} key={option.value}>{option.label}</option>)}
+              </SelectControl>
               <label className="sr-only" htmlFor="document-year">Year</label>
               <input
                 aria-label="Filter by four-digit year"
@@ -411,6 +433,11 @@ export default function DocumentsPage() {
           </div>
         </section>
 
+        {categoryCatalog.status === "unavailable" ? <p className="mt-3 text-sm text-[#626b79]" role="status">
+          Category editing is temporarily unavailable. You can continue using the document library.
+          <button className="ml-2 min-h-11 font-semibold text-primary underline" type="button" onClick={categoryCatalog.retry}>Try again</button>
+        </p> : null}
+
         {legalAdmin ? <section className="mt-4 rounded border border-outline-variant bg-white p-4" aria-label="Legal review filters">
           <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-center"><div><h2 className="text-sm font-bold text-primary">Legal metadata review</h2><p className="mt-1 text-xs text-[#626b79]">Registry namespace: <strong>{legalNamespace ?? "Unavailable"}</strong>. Legal filters apply only to the {data?.items.length ?? 0} documents loaded on this page.</p></div>{legalAnnotationsReady ? <div className="flex flex-wrap gap-2"><SelectControl label="Instrument type" value={instrumentFilter} onChange={value => setInstrumentFilter(value as InstrumentType | "")}><option value="">All instruments</option>{instrumentTypes.map(value => <option key={value} value={value}>{titleCase(value)}</option>)}</SelectControl><SelectControl label="Review status" value={reviewFilter} onChange={value => setReviewFilter(value as typeof reviewFilter)}><option value="">All review states</option><option value="needs_review">Unreviewed (includes no profile)</option><option value="no_profile">No profile</option><option value="unreviewed">Unreviewed profile</option><option value="reviewed">Reviewed</option></SelectControl><button className="secondary-button" onClick={() => { setInstrumentFilter("unknown"); setReviewFilter(""); }}>Unknown classification</button></div> : null}</div>
           {legalError ? <p className="mt-3 text-sm text-[#8d3f27]" role="status">{legalError}</p> : null}
@@ -450,8 +477,8 @@ export default function DocumentsPage() {
             <div className="rounded border border-dashed border-outline-variant bg-white p-8 text-center"><h2 className="font-bold">No documents on this page match the legal filters</h2><p className="mt-2 text-sm text-[#626b79]">Clear the page-scoped legal filters or move to another document page.</p></div>
           ) : data ? (
             <>
-              <DocumentTable canRetry={canIngestDocuments(auth?.user.role)} documents={visibleDocuments} legalAdmin={legalAdmin} legalReady={legalAnnotationsReady} onLegalReview={setLegalDocument} onRetry={retryDocument} retryStates={retryStates} />
-              <DocumentCards canRetry={canIngestDocuments(auth?.user.role)} documents={visibleDocuments} legalAdmin={legalAdmin} legalReady={legalAnnotationsReady} onLegalReview={setLegalDocument} onRetry={retryDocument} retryStates={retryStates} />
+              <DocumentTable canRetry={canIngestDocuments(auth?.user.role)} documents={visibleDocuments} legalAdmin={legalAdmin} legalReady={legalAnnotationsReady} onLegalReview={setLegalDocument} onMetadataReview={canIngestDocuments(auth?.user.role) && categoryCatalog.status === "available" ? setMetadataDocument : undefined} onRetry={retryDocument} retryStates={retryStates} />
+              <DocumentCards canRetry={canIngestDocuments(auth?.user.role)} documents={visibleDocuments} legalAdmin={legalAdmin} legalReady={legalAnnotationsReady} onLegalReview={setLegalDocument} onMetadataReview={canIngestDocuments(auth?.user.role) && categoryCatalog.status === "available" ? setMetadataDocument : undefined} onRetry={retryDocument} retryStates={retryStates} />
             </>
           ) : null}
         </section>
@@ -484,13 +511,25 @@ export default function DocumentsPage() {
           </footer>
         ) : null}
       </div>
+      {metadataDocument && auth ? <DocumentMetadataReview key={metadataDocument.id} document={metadataDocument}
+        categories={categoryCatalog.categories} getToken={getMetadataToken} onClose={() => setMetadataDocument(null)}
+        onSaved={categorization => {
+          setData(current => {
+            if (!current) return current;
+            const updated = { ...current, items: current.items.map(item => item.id === metadataDocument.id ? { ...item, categorization } : item) };
+            dataRef.current = updated;
+            return updated;
+          });
+          setRetryKey(value => value + 1);
+        }} /> : null}
       {legalAdmin && legalDocument && auth ? <LegalReview key={legalDocument.id} document={legalDocument} documents={data?.items ?? []} profile={legalProfiles[legalDocument.id] ?? null} profiles={legalProfiles} token={auth.access_token} onClose={() => setLegalDocument(null)} onOpenOwner={setLegalDocument} onSaved={saved => setLegalProfiles(current => ({ ...current, [legalDocument.id]: saved }))} /> : null}
     </main>
     </SidebarPageShell>
   );
 }
 
-function SelectControl({ children, grow = false, label, onChange, value }: {
+function SelectControl({ children, disabled = false, grow = false, label, onChange, value }: {
+  disabled?: boolean;
   children: React.ReactNode;
   grow?: boolean;
   label: string;
@@ -500,19 +539,20 @@ function SelectControl({ children, grow = false, label, onChange, value }: {
   return (
     <label className={grow ? "min-w-0 flex-1 sm:min-w-48" : "min-w-0"}>
       <span className="sr-only">{label}</span>
-      <select aria-label={label} className="h-11 w-full rounded border border-outline-variant bg-white px-3 text-[14px] text-[#323b45] focus:border-primary" onChange={(event) => onChange(event.target.value)} value={value}>
+      <select disabled={disabled} aria-label={label} className="h-11 w-full rounded border border-outline-variant bg-white px-3 text-[14px] text-[#323b45] focus:border-primary" onChange={(event) => onChange(event.target.value)} value={value}>
         {children}
       </select>
     </label>
   );
 }
 
-function DocumentTable({ canRetry, documents, legalAdmin, legalReady, onLegalReview, onRetry, retryStates }: {
+function DocumentTable({ canRetry, documents, legalAdmin, legalReady, onLegalReview, onMetadataReview, onRetry, retryStates }: {
   canRetry: boolean;
   documents: AnnotatedDocument[];
   legalAdmin: boolean;
   legalReady: boolean;
   onLegalReview: (document: DocumentLibraryItem) => void;
+  onMetadataReview?: (document: DocumentLibraryItem) => void;
   onRetry: (document: DocumentLibraryItem) => void;
   retryStates: Record<string, RetryUpdate>;
 }) {
@@ -537,7 +577,7 @@ function DocumentTable({ canRetry, documents, legalAdmin, legalReady, onLegalRev
                   <p className="break-words text-[14px] font-bold leading-5 text-[#151a18]">{displayTitle(document)}</p>
                   <p className="mt-1 break-all text-[12px] leading-4 text-[#737c88]">{document.filename}</p>
                 </td>
-                <td className="px-4 py-4"><TypeCell document={document} /></td>
+                <td className="px-4 py-4"><TypeCell document={document} onMetadataReview={onMetadataReview} /></td>
                 <td className="px-4 py-4"><AuthorityCell document={document} /></td>
                 <td className="px-4 py-4"><SizeCell document={document} /></td>
                 <td className="px-4 py-4"><DocumentStatus document={document} canRetry={canRetry} onRetry={onRetry} retryState={retryStates[document.filename]} /></td>
@@ -551,12 +591,13 @@ function DocumentTable({ canRetry, documents, legalAdmin, legalReady, onLegalRev
   );
 }
 
-function DocumentCards({ canRetry, documents, legalAdmin, legalReady, onLegalReview, onRetry, retryStates }: {
+function DocumentCards({ canRetry, documents, legalAdmin, legalReady, onLegalReview, onMetadataReview, onRetry, retryStates }: {
   canRetry: boolean;
   documents: AnnotatedDocument[];
   legalAdmin: boolean;
   legalReady: boolean;
   onLegalReview: (document: DocumentLibraryItem) => void;
+  onMetadataReview?: (document: DocumentLibraryItem) => void;
   onRetry: (document: DocumentLibraryItem) => void;
   retryStates: Record<string, RetryUpdate>;
 }) {
@@ -572,7 +613,7 @@ function DocumentCards({ canRetry, documents, legalAdmin, legalReady, onLegalRev
             </div>
           </div>
           <dl className="mt-4 grid grid-cols-2 gap-x-4 gap-y-3 border-t border-outline-variant pt-4 text-[13px]">
-            <CardDetail label="Type"><TypeCell document={document} /></CardDetail>
+            <CardDetail label="Type"><TypeCell document={document} onMetadataReview={onMetadataReview} /></CardDetail>
             <CardDetail label="Status"><DocumentStatus document={document} canRetry={canRetry} onRetry={onRetry} retryState={retryStates[document.filename]} /></CardDetail>
             <CardDetail label="Authority / year"><AuthorityCell document={document} /></CardDetail>
             <CardDetail label="Content"><SizeCell document={document} /></CardDetail>
@@ -584,12 +625,25 @@ function DocumentCards({ canRetry, documents, legalAdmin, legalReady, onLegalRev
   );
 }
 
-function TypeCell({ document }: { document: DocumentLibraryItem }) {
-  return <div className="flex flex-wrap items-center gap-2"><span className="rounded bg-[#e5eee9] px-2 py-1 text-[11px] font-bold uppercase text-primary">{displayMetadata(document.kind)}</span><span className="text-[13px] text-[#4e5966]">{document.document_type ? titleCase(document.document_type) : "—"}</span></div>;
+function TypeCell({ document, onMetadataReview }: { document: DocumentLibraryItem; onMetadataReview?: (document: DocumentLibraryItem) => void }) {
+  const category = document.categorization?.values.document_type;
+  return <div>
+    <div className="flex flex-wrap items-center gap-2"><span className="rounded bg-[#e5eee9] px-2 py-1 text-[11px] font-bold uppercase text-primary">{displayMetadata(document.kind)}</span>
+      <span className="text-[13px] text-[#4e5966]">{category ? categoryLabel(category) : document.document_type ? titleCase(document.document_type) : "Uncategorized"}</span>
+    </div>
+    {onMetadataReview ? <button className="mt-1 min-h-11 text-left text-xs font-semibold text-primary underline" type="button" onClick={() => onMetadataReview(document)}>
+      {document.categorization?.review_required ? "Review metadata" : category ? "Edit metadata" : "Add category"}
+    </button> : null}
+  </div>;
 }
 
 function AuthorityCell({ document }: { document: DocumentLibraryItem }) {
-  return <div className="text-[13px] leading-5 text-[#4e5966]"><p>{displayMetadata(document.authority)}</p><p className="text-[12px] text-[#737c88]">{document.years.length ? document.years.join(", ") : "—"}</p></div>;
+  const values = document.categorization?.values;
+  const authority = values && "issuing_authority" in values ? values.issuing_authority : document.authority;
+  return <div className="text-[13px] leading-5 text-[#4e5966]"><p>{displayMetadata(authority)}</p>
+    <p className="text-[12px] text-[#737c88]">{values?.issued_date ? `Issued ${values.issued_date}` : document.years.length ? document.years.join(", ") : "—"}</p>
+    {values?.state || values?.jurisdiction ? <p className="mt-1 text-xs text-[#737c88]">{[values.state, values.jurisdiction].filter(Boolean).join(" · ")}</p> : null}
+  </div>;
 }
 
 function SizeCell({ document }: { document: DocumentLibraryItem }) {

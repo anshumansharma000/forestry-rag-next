@@ -1,4 +1,5 @@
 import type { DocumentLibraryItem, DocumentLibraryParams } from "./api";
+import { DOCUMENT_CATEGORIES, DocumentCategory } from "./document-categorization";
 
 export type DocumentLibraryQuery = DocumentLibraryParams;
 
@@ -7,6 +8,7 @@ export const DEFAULT_DOCUMENT_QUERY: DocumentLibraryQuery = {
   search: "",
   kind: undefined,
   document_type: undefined,
+  category: undefined,
   year: undefined,
   sort_by: "updated_at",
   sort_order: "desc",
@@ -41,6 +43,8 @@ export function parseDocumentQuery(params: URLSearchParams): DocumentLibraryQuer
     search: params.get("search")?.trim() ?? "",
     kind: kinds.has(kind) ? (kind as DocumentLibraryQuery["kind"]) : undefined,
     document_type: params.get("document_type")?.trim() || undefined,
+    category: DOCUMENT_CATEGORIES.includes(params.get("category") as DocumentCategory)
+      ? params.get("category") as DocumentCategory : undefined,
     year: /^\d{4}$/.test(year) ? year : undefined,
     sort_by: sortFields.has(sortBy)
       ? (sortBy as DocumentLibraryQuery["sort_by"])
@@ -59,6 +63,7 @@ export function buildDocumentQuery(query: DocumentLibraryQuery) {
   if (query.search?.trim()) params.set("search", query.search.trim());
   if (query.kind) params.set("kind", query.kind);
   if (query.document_type) params.set("document_type", query.document_type);
+  if (query.category) params.set("category", query.category);
   if (query.year) params.set("year", query.year);
   params.set("sort_by", query.sort_by);
   params.set("sort_order", query.sort_order);

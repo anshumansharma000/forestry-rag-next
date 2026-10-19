@@ -17,6 +17,9 @@ import {
   Upload,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import Link from "next/link";
+import { CategorizationFields, useDocumentCategories } from "../../components/categorization-fields";
+import { CategorizationDraft, categorizationDraft, categoryLabel, uploadCategorization, validateCategorizationDraft } from "../../lib/document-categorization";
 import { SidebarPageShell } from "../../components/app-sidebar";
 import {
   ensureFreshAuth,
@@ -278,6 +281,8 @@ export default function IngestionPage() {
     DEFAULT_MAX_CONTENT_CHARS,
   );
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
+  const [metadataDrafts, setMetadataDrafts] = useState<Record<string, CategorizationDraft>>({});
+  const categoryCatalog = useDocumentCategories(auth?.access_token);
   const [uploadRows, setUploadRows] = useState<UploadRow[]>([]);
   const [activityUpdates, setActivityUpdates] = useState<ActivityUpdate[]>([]);
   const [now, setNow] = useState(() => Date.now());
@@ -560,6 +565,10 @@ export default function IngestionPage() {
     }
 
     setSelectedFiles(files);
+    setMetadataDrafts(current => Object.fromEntries(files.map((file, index) => {
+      const key = fileKey(file, index);
+      return [key, current[key] ?? categorizationDraft()];
+    })));
     setUploadRows(
       files.map((file, index) => ({
         key: fileKey(file, index),
@@ -630,6 +639,15 @@ export default function IngestionPage() {
       return;
     }
 
+    for (let index = 0; index < selectedFiles.length; index += 1) {
+      const file = selectedFiles[index];
+      const draft = metadataDrafts[fileKey(file, index)] ?? categorizationDraft();
+      const validation = validateCategorizationDraft(draft, categoryCatalog.categories);
+      if (validation || (uploadCategorization(draft) && categoryCatalog.status !== "available")) {
+        setError(`${file.name}: ${validation || "Categories are unavailable. Try loading them again before uploading your metadata."}`);
+        return;
+      }
+    }
     setNotice(null);
     setError(null);
     setUploading(true);
@@ -638,7 +656,9 @@ export default function IngestionPage() {
       const items = selectedFiles.map((file, index) => ({
         key: fileKey(file, index),
         file,
+        categorization: uploadCategorization(metadataDrafts[fileKey(file, index)] ?? categorizationDraft()),
       }));
+      let hasFailures = false;
       await processDocumentUploads(items, {
         presign: async (files) =>
           (
@@ -652,9 +672,9 @@ export default function IngestionPage() {
             )
           ).uploads,
         put: putFileToStorage,
-        complete: async (upload) => {
+        complete: async (upload, categorization) => {
           const response = await completeDocumentUploads(token, [
-            { upload_id: upload.upload_id, filename: upload.filename },
+            { upload_id: upload.upload_id, filename: upload.filename, ...(categorization ? { categorization } : {}) },
           ]);
           const completed = response.files[0];
           if (!completed) throw new Error("The upload service did not finalize this file.");
@@ -674,6 +694,8 @@ export default function IngestionPage() {
             });
           }
           if (update.status === "failed") {
+            hasFailures = true;
+            setError("Some documents could not be uploaded or processed. Check the status beside each file.");
             addActivityUpdate({
               id: `${key}:failed:${update.failureStage}`,
               message: `${filename}: ${update.detail || "Document processing failed."}`,
@@ -688,7 +710,7 @@ export default function IngestionPage() {
         errorMessage: formatApiError,
       });
 
-      setNotice("Your documents were uploaded and are now being prepared for search.");
+      if (!hasFailures) setNotice("Your documents were uploaded and are now being prepared for search. Review their metadata in Documents when processing finishes.");
       setSelectedFiles([]);
       if (fileInputRef.current) {
         fileInputRef.current.value = "";
@@ -807,14 +829,9 @@ export default function IngestionPage() {
 
         {error ? <Banner tone="error" message={error} /> : null}
         {notice ? <Banner tone="success" message={notice} /> : null}
-        {canManage ? (
-          <div className="mt-5 rounded border border-[#e0cfa9] bg-[#fff9e9] px-4 py-3 text-[14px] leading-6 text-[#6c551d]" role="status">
-            <strong>Index version 4:</strong> after this backend release, every
-            existing document must be fully re-ingested. Deployment alone does
-            not re-embed documents; re-run the existing ingestion flow for each
-            document and wait for every job to succeed.
-          </div>
-        ) : null}
+        {canManage ? <p className="mt-4 text-sm leading-6 text-[#626b79]">
+          Choose a category now, or review suggestions after processing. Existing documents can be categorized in the <Link className="font-semibold text-primary underline" href="/documents">document library</Link>.
+        </p> : null}
 
         {loading ? (
           <div className="mt-6 flex items-center gap-3 rounded border border-outline-variant bg-white px-4 py-4 shadow-tonal">
@@ -904,6 +921,26 @@ export default function IngestionPage() {
                 <p className="text-[12px] leading-4 text-[#626b79]">
                   PDF, TXT, DOCX, PPT, and PPTX. {DOCUMENT_UPLOAD_LIMIT_COPY}
                 </p>
+                {categoryCatalog.status === "loading" ? <p className="text-xs text-[#626b79]" role="status">Loading document categories…</p> : null}
+                {categoryCatalog.status === "unavailable" ? <div className="rounded bg-[#fff9e9] p-3 text-xs leading-5 text-[#6c551d]" role="status">
+                  Categories are temporarily unavailable. You can still upload without metadata.
+                  <button className="ml-2 min-h-11 font-semibold underline" onClick={categoryCatalog.retry} type="button">Try again</button>
+                </div> : null}
+                {selectedFiles.length > 1 && categoryCatalog.status === "available" ? <label className="block text-sm font-semibold text-[#414844]">
+                  Apply a category to all selected files
+                  <select aria-label="Apply a category to all selected files" className="field mt-1.5" disabled={uploading} defaultValue="placeholder" onChange={event => {
+                    const value = event.target.value;
+                    setMetadataDrafts(current => Object.fromEntries(selectedFiles.map((file, index) => {
+                      const key = fileKey(file, index);
+                      return [key, { ...(current[key] ?? categorizationDraft()), document_type: value }];
+                    })));
+                    event.target.value = "placeholder";
+                  }}>
+                    <option value="placeholder" disabled>Choose a category for this batch</option>
+                    <option value="">Suggest during processing</option>
+                    {categoryCatalog.categories.map(option => <option value={option.value} key={option.value}>{option.label}</option>)}
+                  </select>
+                </label> : null}
                 {uploadRows.length ? (
                   <div className="rounded border border-outline-variant bg-surface-container-lowest px-3 py-2">
                     <p className="text-[12px] font-semibold uppercase text-[#7b8492]">
@@ -937,6 +974,15 @@ export default function IngestionPage() {
                               {uploadStatusLabel(file.status)}
                             </span>
                           </div>
+                          {file.status === "selected" && categoryCatalog.status === "available" ? <div className="mt-3">
+                            <CategorizationFields compact disabled={uploading} categories={categoryCatalog.categories}
+                              draft={metadataDrafts[file.key] ?? categorizationDraft()}
+                              onChange={draft => setMetadataDrafts(current => ({ ...current, [file.key]: draft }))} />
+                          </div> : metadataDrafts[file.key]?.document_type ? <p className="mt-2 text-xs text-[#626b79]">
+                            {categoryLabel(metadataDrafts[file.key].document_type, categoryCatalog.categories)}
+                          </p> : null}
+                          {file.status === "indexed" ? <Link className="mt-2 inline-flex min-h-11 items-center text-xs font-bold text-primary underline"
+                            href={`/documents?search=${encodeURIComponent(file.completedFilename ?? file.filename)}`}>Review document metadata</Link> : null}
                           {file.status === "uploading" ? (
                             <div className="mt-2 flex items-center gap-2">
                               <div

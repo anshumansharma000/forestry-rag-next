@@ -1,7 +1,8 @@
 "use client";
 
-import { AlertCircle, Loader2, ShieldCheck } from "lucide-react";
+import { AlertCircle, Loader2 } from "lucide-react";
 import { FormEvent, useEffect, useState } from "react";
+import { BrandLogo } from "../../components/brand-logo";
 import { PasswordInput } from "../../components/password-input";
 import { login, readStoredAuth, storeAuth } from "../../lib/api";
 
@@ -39,11 +40,8 @@ export default function LoginRoute() {
     <main className="grid min-h-screen bg-surface px-5 py-8 text-on-surface lg:grid-cols-[1fr_440px] lg:px-0 lg:py-0">
       <section className="hidden min-h-screen items-center bg-primary px-12 text-white lg:flex">
         <div className="max-w-2xl">
-          <div className="grid h-16 w-16 place-items-center rounded-lg bg-white/10">
-            <ShieldCheck className="h-9 w-9" />
-          </div>
-          <h1 className="mt-8 text-[42px] font-bold leading-[1.12]">
-            Aranyabodh
+          <h1 className="w-fit rounded-xl bg-white p-5">
+            <BrandLogo className="h-auto w-[180px]" />
           </h1>
           <p className="mt-5 max-w-xl text-[18px] leading-7 text-white/78">
             Find reliable answers in department documents and check the source
@@ -59,7 +57,7 @@ export default function LoginRoute() {
         >
           <div className="flex items-center gap-3">
             <span className="grid h-11 w-11 place-items-center rounded bg-[#edf8f1] text-primary">
-              <ShieldCheck className="h-6 w-6" />
+              <BrandLogo decorative className="h-8 w-8" />
             </span>
             <div>
               <h2 className="text-[24px] font-bold text-primary">Sign in</h2>

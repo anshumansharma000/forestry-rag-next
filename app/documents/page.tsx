@@ -7,7 +7,6 @@ import {
   FileText,
   Loader2,
   Search,
-  ShieldCheck,
   SlidersHorizontal,
   X,
 } from "lucide-react";
@@ -324,24 +323,12 @@ export default function DocumentsPage() {
 
   return (
     <SidebarPageShell activePath="/documents" user={auth?.user ?? null}>
-    <main className="min-h-screen bg-surface px-4 py-5 text-on-surface sm:px-8 sm:py-7">
+    <main className="document-workspace min-h-[calc(100vh-72px)] bg-surface px-4 py-5 text-on-surface sm:px-8 sm:py-7">
       <div className="mx-auto max-w-7xl">
-        <header className="flex flex-col justify-between gap-4 border-b border-outline-variant pb-6 sm:flex-row sm:items-end">
-          <div>
-            <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-              <h1 className="text-[30px] font-bold leading-9 text-primary">Documents</h1>
-              <p className="text-[14px] font-semibold text-[#626b79]" aria-live="polite">
-                {data
-                  ? `${data.pagination.total.toLocaleString()} ${query.status} documents`
-                  : `${titleCase(query.status)} document library`}
-              </p>
-            </div>
-          </div>
-          <div className="inline-flex min-h-11 w-fit items-center gap-2 rounded border border-[#b7d6c4] bg-[#edf8f1] px-3 text-[13px] font-semibold text-primary">
-            <ShieldCheck className="h-4 w-4" />
-            {auth?.user.email ?? "Loading"}
-          </div>
-        </header>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <p className="text-sm leading-6 text-[#626b79]">Find department sources, review metadata, and check readiness for chat.</p>
+          {auth && canIngestDocuments(auth.user.role) ? <a className="primary-button" href="/ingestion">Upload documents</a> : null}
+        </div>
 
         <section className="mt-6" aria-labelledby="library-controls">
           <h2 className="sr-only" id="library-controls">Document library controls</h2>
@@ -349,7 +336,7 @@ export default function DocumentsPage() {
             <Search className="pointer-events-none absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 text-[#6b7480]" />
             <input
               aria-label="Search documents by title or filename"
-              className="h-14 w-full rounded border border-outline-variant bg-white pl-12 pr-12 text-[16px] shadow-tonal placeholder:text-[#7b8492] focus:border-primary"
+              className="h-14 w-full rounded border border-outline-variant bg-white pl-12 pr-12 text-[16px] shadow-sm placeholder:text-[#7b8492] focus:border-primary"
               onChange={(event) => setSearchInput(event.target.value)}
               placeholder="Search by title or filename"
               type="search"
@@ -368,49 +355,12 @@ export default function DocumentsPage() {
           </div>
 
           <div className="mt-3 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-            <div className="grid gap-3 sm:grid-cols-4 lg:flex lg:flex-wrap">
+            <div className="flex flex-wrap items-start gap-3">
               <SelectControl label="Processing status" value={query.status} onChange={(value) => setStatus(value as DocumentLibraryQuery["status"])}>
                 <option value="indexed">Ready for chat</option>
                 <option value="failed">Processing failed</option>
               </SelectControl>
-              <SelectControl label="File type" value={query.kind ?? ""} onChange={(value) => setControl({ kind: (value || undefined) as DocumentLibraryQuery["kind"] })}>
-                <option value="">All file types</option>
-                <option value="pdf">PDF</option>
-                <option value="docx">DOCX</option>
-                <option value="txt">TXT</option>
-                <option value="ppt">PPT</option>
-                <option value="pptx">PPTX</option>
-              </SelectControl>
-              <SelectControl label="Document type" value={query.document_type ?? ""} onChange={(value) => setControl({ document_type: value || undefined })}>
-                <option value="">All document types</option>
-                {DOCUMENT_TYPES.map((type) => <option key={type} value={type}>{titleCase(type)}</option>)}
-              </SelectControl>
-              <SelectControl label="Category" value={query.category ?? ""} disabled={categoryCatalog.status !== "available"}
-                onChange={value => setControl({ category: (value || undefined) as DocumentCategory | undefined })}>
-                <option value="">All categories</option>
-                {categoryCatalog.categories.map(option => <option value={option.value} key={option.value}>{option.label}</option>)}
-              </SelectControl>
-              <label className="sr-only" htmlFor="document-year">Year</label>
-              <input
-                aria-label="Filter by four-digit year"
-                className="h-11 min-w-0 rounded border border-outline-variant bg-white px-3 text-[14px] text-[#323b45] focus:border-primary lg:w-32"
-                id="document-year"
-                inputMode="numeric"
-                maxLength={4}
-                onChange={(event) => {
-                  const value = event.target.value.replace(/\D/g, "").slice(0, 4);
-                  setYearInput(value);
-                  if (!value || value.length === 4) setControl({ year: value || undefined });
-                }}
-                placeholder="Year"
-                type="text"
-                value={yearInput}
-              />
-              {filtersActive ? (
-                <button className="inline-flex h-11 items-center justify-center gap-2 rounded px-3 text-[14px] font-semibold text-primary hover:bg-[#edf8f1]" onClick={clearFilters} type="button">
-                  <X className="h-4 w-4" /> Clear all filters
-                </button>
-              ) : null}
+
             </div>
 
             <div className="flex items-center gap-2">
@@ -431,17 +381,69 @@ export default function DocumentsPage() {
               </SelectControl>
             </div>
           </div>
+          <div className="mt-3">
+            <details className="relative rounded-xl border border-outline-variant/70 bg-white p-3">
+              <summary className="cursor-pointer text-sm font-medium text-primary">Filters{filtersActive ? " · Active" : ""}</summary>
+              <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+              <SelectControl label="File type" value={query.kind ?? ""} onChange={(value) => setControl({ kind: (value || undefined) as DocumentLibraryQuery["kind"] })}>
+                <option value="">All file types</option>
+                <option value="pdf">PDF</option>
+                <option value="docx">DOCX</option>
+                <option value="txt">TXT</option>
+                <option value="ppt">PPT</option>
+                <option value="pptx">PPTX</option>
+              </SelectControl>
+              <SelectControl label="Document type" value={query.document_type ?? ""} onChange={(value) => setControl({ document_type: value || undefined })}>
+                <option value="">All document types</option>
+                {DOCUMENT_TYPES.map((type) => <option key={type} value={type}>{titleCase(type)}</option>)}
+              </SelectControl>
+              <SelectControl label="Category" value={query.category ?? ""} disabled={categoryCatalog.status !== "available"}
+                onChange={value => setControl({ category: (value || undefined) as DocumentCategory | undefined })}>
+                <option value="">All categories</option>
+                {categoryCatalog.categories.map(option => <option value={option.value} key={option.value}>{option.label}</option>)}
+              </SelectControl>
+              <label className="sr-only" htmlFor="document-year">Year</label>
+              <input
+                aria-label="Filter by four-digit year"
+                className="h-11 min-w-0 rounded-lg border border-outline-variant/70 bg-white px-3 text-[14px] text-[#323b45] focus:border-primary lg:w-32"
+                id="document-year"
+                inputMode="numeric"
+                maxLength={4}
+                onChange={(event) => {
+                  const value = event.target.value.replace(/\D/g, "").slice(0, 4);
+                  setYearInput(value);
+                  if (!value || value.length === 4) setControl({ year: value || undefined });
+                }}
+                placeholder="Year"
+                type="text"
+                value={yearInput}
+              />
+              {filtersActive ? (
+                <button className="inline-flex h-11 items-center justify-center gap-2 rounded px-3 text-[14px] font-semibold text-primary hover:bg-[#edf8f1]" onClick={clearFilters} type="button">
+                  <X className="h-4 w-4" /> Clear all filters
+                </button>
+              ) : null}
+              </div>
+            </details>
+          </div>
         </section>
+
+        <div className="mt-4 flex flex-wrap items-center gap-2 text-sm" aria-label="Document results and active filters">
+          <span className="mr-2 text-[#626b79]" aria-live="polite">{data ? `${data.pagination.total.toLocaleString()} documents` : "Loading documents…"}</span>
+          {query.search ? <button className="filter-chip" onClick={() => setSearchInput("")} aria-label="Remove search filter">Search: {query.search}<X className="h-3.5 w-3.5" /></button> : null}
+          {(["kind", "document_type", "category", "year"] as const).map(key => query[key] ? <button key={key} className="filter-chip" aria-label={`Remove ${key.replaceAll("_", " ")} filter`} onClick={() => { if (key === "year") setYearInput(""); setControl({ [key]: undefined }); }}>{key === "category" ? categoryLabel(query.category!, categoryCatalog.categories) : key === "kind" ? query.kind?.toUpperCase() : key === "document_type" ? titleCase(query.document_type!) : query.year}<X className="h-3.5 w-3.5" /></button> : null)}
+        </div>
 
         {categoryCatalog.status === "unavailable" ? <p className="mt-3 text-sm text-[#626b79]" role="status">
           Category editing is temporarily unavailable. You can continue using the document library.
           <button className="ml-2 min-h-11 font-semibold text-primary underline" type="button" onClick={categoryCatalog.retry}>Try again</button>
         </p> : null}
 
-        {legalAdmin ? <section className="mt-4 rounded border border-outline-variant bg-white p-4" aria-label="Legal review filters">
-          <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-center"><div><h2 className="text-sm font-bold text-primary">Legal metadata review</h2><p className="mt-1 text-xs text-[#626b79]">Registry namespace: <strong>{legalNamespace ?? "Unavailable"}</strong>. Legal filters apply only to the {data?.items.length ?? 0} documents loaded on this page.</p></div>{legalAnnotationsReady ? <div className="flex flex-wrap gap-2"><SelectControl label="Instrument type" value={instrumentFilter} onChange={value => setInstrumentFilter(value as InstrumentType | "")}><option value="">All instruments</option>{instrumentTypes.map(value => <option key={value} value={value}>{titleCase(value)}</option>)}</SelectControl><SelectControl label="Review status" value={reviewFilter} onChange={value => setReviewFilter(value as typeof reviewFilter)}><option value="">All review states</option><option value="needs_review">Unreviewed (includes no profile)</option><option value="no_profile">No profile</option><option value="unreviewed">Unreviewed profile</option><option value="reviewed">Reviewed</option></SelectControl><button className="secondary-button" onClick={() => { setInstrumentFilter("unknown"); setReviewFilter(""); }}>Unknown classification</button></div> : null}</div>
+        {legalAdmin ? <details className="mt-4 rounded-xl border border-outline-variant/70 bg-white p-4" aria-label="Legal review filters">
+          <summary className="cursor-pointer text-sm font-medium text-primary">Legal metadata review <span className="ml-2 text-xs font-normal text-[#626b79]">Filters this page only{instrumentFilter || reviewFilter ? " · Active" : ""}</span></summary>
+          <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-center"><div><p className="mt-1 text-xs text-[#626b79]">Registry namespace: <strong>{legalNamespace ?? "Unavailable"}</strong>. Legal filters apply only to the {data?.items.length ?? 0} documents loaded on this page.</p></div>{legalAnnotationsReady ? <div className="flex flex-wrap gap-2"><SelectControl label="Instrument type" value={instrumentFilter} onChange={value => setInstrumentFilter(value as InstrumentType | "")}><option value="">All instruments</option>{instrumentTypes.map(value => <option key={value} value={value}>{titleCase(value)}</option>)}</SelectControl><SelectControl label="Review status" value={reviewFilter} onChange={value => setReviewFilter(value as typeof reviewFilter)}><option value="">All review states</option><option value="needs_review">Unreviewed (includes no profile)</option><option value="no_profile">No profile</option><option value="unreviewed">Unreviewed profile</option><option value="reviewed">Reviewed</option></SelectControl><button className="secondary-button" onClick={() => { setInstrumentFilter("unknown"); setReviewFilter(""); }}>Unknown classification</button></div> : null}</div>
           {legalError ? <p className="mt-3 text-sm text-[#8d3f27]" role="status">{legalError}</p> : null}
-        </section> : null}
+        </details> : null}
 
         {error ? (
           <div className="mt-5 flex flex-col gap-3 rounded border border-[#e6b7a6] bg-[#fff5f1] p-4 text-[#743f2c] sm:flex-row sm:items-center sm:justify-between" role="alert">
@@ -539,7 +541,7 @@ function SelectControl({ children, disabled = false, grow = false, label, onChan
   return (
     <label className={grow ? "min-w-0 flex-1 sm:min-w-48" : "min-w-0"}>
       <span className="sr-only">{label}</span>
-      <select disabled={disabled} aria-label={label} className="h-11 w-full rounded border border-outline-variant bg-white px-3 text-[14px] text-[#323b45] focus:border-primary" onChange={(event) => onChange(event.target.value)} value={value}>
+      <select disabled={disabled} aria-label={label} className="h-11 w-full rounded-lg border border-outline-variant/70 bg-white px-3 text-[14px] text-[#323b45] focus:border-primary" onChange={(event) => onChange(event.target.value)} value={value}>
         {children}
       </select>
     </label>
@@ -557,17 +559,17 @@ function DocumentTable({ canRetry, documents, legalAdmin, legalReady, onLegalRev
   retryStates: Record<string, RetryUpdate>;
 }) {
   return (
-    <div className="hidden overflow-hidden rounded border border-outline-variant bg-white shadow-tonal md:block">
+    <div className="hidden overflow-hidden rounded border border-outline-variant bg-white shadow-sm md:block">
       <div className="overflow-x-auto">
-        <table className="w-full table-fixed border-collapse text-left">
+        <table className={`w-full table-fixed border-collapse text-left ${legalAdmin ? "min-w-[1120px]" : "min-w-[940px]"}`}>
           <thead className="bg-surface-container-low text-[12px] uppercase tracking-wide text-[#626b79]">
             <tr>
-              <th className="w-[28%] px-4 py-3 font-bold" scope="col">Document</th>
-              <th className="w-[15%] px-4 py-3 font-bold" scope="col">Type</th>
-              <th className="w-[20%] px-4 py-3 font-bold" scope="col">Authority / year</th>
-              <th className="w-[15%] px-4 py-3 font-bold" scope="col">Content</th>
-              <th className="w-[22%] px-4 py-3 font-bold" scope="col">Status</th>
-              {legalAdmin ? <th className="w-[24%] px-4 py-3 font-bold" scope="col">Legal review</th> : null}
+              <th className="w-[300px] px-4 py-3 font-bold" scope="col">Document</th>
+              <th className="w-[140px] px-4 py-3 font-bold" scope="col">Type</th>
+              <th className="w-[160px] px-4 py-3 font-bold" scope="col">Authority / year</th>
+              <th className="w-[120px] px-4 py-3 font-bold" scope="col">Content</th>
+              <th className="w-[170px] px-4 py-3 font-bold" scope="col">Status</th>
+              {legalAdmin ? <th className="w-[200px] px-4 py-3 font-bold" scope="col">Legal review</th> : null}
             </tr>
           </thead>
           <tbody className="divide-y divide-outline-variant">
@@ -604,7 +606,7 @@ function DocumentCards({ canRetry, documents, legalAdmin, legalReady, onLegalRev
   return (
     <div className="grid gap-3 md:hidden">
       {documents.map((document) => (
-        <article className="rounded border border-outline-variant bg-white p-4 shadow-tonal" key={document.id}>
+        <article className="rounded-xl border border-outline-variant/60 bg-white p-4 shadow-sm" key={document.id}>
           <div className="flex items-start gap-3">
             <span className="grid h-11 w-11 shrink-0 place-items-center rounded bg-[#edf8f1] text-primary"><FileText className="h-5 w-5" /></span>
             <div className="min-w-0">

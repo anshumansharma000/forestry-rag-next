@@ -6,7 +6,6 @@ import {
   KeyRound,
   Loader2,
   Save,
-  ShieldCheck,
   UserCircle,
 } from "lucide-react";
 import { FormEvent, useEffect, useState } from "react";
@@ -38,6 +37,7 @@ export default function ProfilePage() {
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [feedbackSection, setFeedbackSection] = useState<"profile" | "password">("profile");
   const [notice, setNotice] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [savingProfile, setSavingProfile] = useState(false);
@@ -87,6 +87,7 @@ export default function ProfilePage() {
     event.preventDefault();
     setError(null);
     setNotice(null);
+    setFeedbackSection("profile");
     setSavingProfile(true);
     try {
       const token = await getToken();
@@ -108,6 +109,7 @@ export default function ProfilePage() {
 
   async function handlePasswordSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    setFeedbackSection("password");
     setError(null);
     setNotice(null);
 
@@ -145,35 +147,19 @@ export default function ProfilePage() {
 
   return (
     <SidebarPageShell activePath="/profile" user={user}>
-    <main className="min-h-screen bg-surface px-5 py-6 text-on-surface sm:px-8">
-      <div className="mx-auto max-w-5xl">
-        <header className="flex flex-col justify-between gap-4 border-b border-outline-variant pb-6 sm:flex-row sm:items-end">
-          <div>
-            <h1 className="text-[30px] font-bold leading-9 text-primary">
-              User Profile
-            </h1>
-            <p className="mt-2 text-[14px] text-[#626b79]">
-              Update your name or change your password.
-            </p>
-          </div>
-          <div className="inline-flex w-fit items-center gap-2 rounded border border-[#b7d6c4] bg-[#edf8f1] px-3 py-2 text-[13px] font-semibold text-primary">
-            <ShieldCheck className="h-4 w-4" />
-            {user ? titleCaseRole(user.role) : "Loading"}
-          </div>
-        </header>
-
-        {error ? <Banner tone="error" message={error} /> : null}
-        {notice ? <Banner tone="success" message={notice} /> : null}
+    <main className="min-h-[calc(100vh-72px)] bg-surface px-5 py-6 text-on-surface sm:px-8">
+      <div className="mx-auto max-w-3xl">
+        <p className="text-sm leading-6 text-[#626b79]">Manage your personal details and password.</p>
 
         {loading ? (
-          <div className="mt-6 flex items-center gap-3 rounded border border-outline-variant bg-white px-4 py-4 shadow-tonal">
+          <div className="mt-6 flex items-center gap-3 rounded border border-outline-variant bg-white px-4 py-4 shadow-sm">
             <Loader2 className="h-5 w-5 animate-spin text-primary" />
             <span className="text-[15px] font-semibold">Loading profile</span>
           </div>
         ) : (
-          <section className="mt-6 grid gap-5 lg:grid-cols-[0.85fr_1.15fr]">
+          <section className="mt-6 grid gap-6">
             <form
-              className="rounded border border-outline-variant bg-white p-5 shadow-tonal"
+              className="rounded-2xl border border-outline-variant/60 bg-white p-5 shadow-sm"
               onSubmit={handleProfileSubmit}
             >
               <div className="flex items-center gap-3">
@@ -182,26 +168,28 @@ export default function ProfilePage() {
                 </span>
                 <div>
                   <h2 className="text-[19px] font-bold text-[#151a18]">
-                    Account
+                    Personal details
                   </h2>
-                  <p className="text-[14px] text-[#626b79]">{user?.email}</p>
+                  <p className="text-[14px] text-[#626b79]">Choose how your name appears in the app.</p>
                 </div>
               </div>
 
+              {feedbackSection === "profile" && error ? <Banner tone="error" message={error} /> : null}
+              {feedbackSection === "profile" && notice ? <Banner tone="success" message={notice} /> : null}
               <TextField
                 label="Full name"
                 onChange={setFullName}
                 value={fullName}
               />
 
-              <div className="mt-4 grid gap-3 text-[13px] leading-5 text-[#4e5966]">
-                <Metric label="Email" value={user?.email ?? "n/a"} />
-                <Metric label="Role" value={user ? titleCaseRole(user.role) : "n/a"} />
-              </div>
+              <dl className="mt-5 grid gap-4 border-t border-outline-variant/50 pt-4 text-sm sm:grid-cols-2">
+                <div><dt className="text-xs text-[#7b8492]">Email</dt><dd className="mt-1 break-all font-medium text-[#324d3d]">{user?.email ?? "—"}</dd></div>
+                <div><dt className="text-xs text-[#7b8492]">Role</dt><dd className="mt-1 font-medium text-[#324d3d]">{user ? titleCaseRole(user.role) : "—"}</dd></div>
+              </dl>
 
               <button
                 className="mt-5 inline-flex h-11 w-full items-center justify-center gap-2 rounded bg-primary px-4 text-[14px] font-semibold text-white transition hover:bg-primary-container disabled:cursor-not-allowed disabled:opacity-60"
-                disabled={savingProfile}
+                disabled={savingProfile || fullName.trim() === (user?.full_name ?? "").trim()}
                 type="submit"
               >
                 {savingProfile ? (
@@ -209,12 +197,12 @@ export default function ProfilePage() {
                 ) : (
                   <Save className="h-4 w-4" />
                 )}
-                Save profile
+                Save changes
               </button>
             </form>
 
             <form
-              className="rounded border border-outline-variant bg-white p-5 shadow-tonal"
+              className="rounded-2xl border border-outline-variant/60 bg-white p-5 shadow-sm"
               onSubmit={handlePasswordSubmit}
             >
               <div className="flex items-center gap-3">
@@ -231,6 +219,8 @@ export default function ProfilePage() {
                 </div>
               </div>
 
+              {feedbackSection === "password" && error ? <Banner tone="error" message={error} /> : null}
+              {feedbackSection === "password" && notice ? <Banner tone="success" message={notice} /> : null}
               <TextField
                 autoComplete="current-password"
                 label="Current password"
@@ -247,6 +237,7 @@ export default function ProfilePage() {
                 type="password"
                 value={newPassword}
               />
+              {newPassword ? <PasswordRules password={newPassword} /> : null}
               <TextField
                 autoComplete="new-password"
                 label="Confirm new password"
@@ -256,11 +247,11 @@ export default function ProfilePage() {
                 value={confirmPassword}
               />
 
-              <PasswordRules password={newPassword} />
 
+              {confirmPassword && confirmPassword !== newPassword ? <p role="status" className="mt-2 text-sm text-[#9b4c34]">Passwords do not match yet.</p> : null}
               <button
                 className="mt-5 inline-flex h-11 w-full items-center justify-center gap-2 rounded bg-primary px-4 text-[14px] font-semibold text-white transition hover:bg-primary-container disabled:cursor-not-allowed disabled:opacity-60"
-                disabled={changingPassword}
+                disabled={changingPassword || !currentPassword || !newPassword || !confirmPassword}
                 type="submit"
               >
                 {changingPassword ? (
@@ -296,7 +287,7 @@ function TextField({
 }) {
   return (
     <label className="mt-4 block">
-      <span className="text-[13px] font-semibold uppercase text-[#626b79]">
+      <span className="text-[13px] font-medium text-[#626b79]">
         {label}
       </span>
       {type === "password" ? (
@@ -332,7 +323,7 @@ function PasswordRules({ password }: { password: string }) {
 
   return (
     <div className="mt-4 rounded border border-outline-variant/70 bg-surface-container-lowest p-3">
-      <div className="flex items-center gap-2 text-[13px] font-semibold uppercase text-[#626b79]">
+      <div className="flex items-center gap-2 text-[13px] font-medium text-[#626b79]">
         <KeyRound className="h-4 w-4" />
         Password criteria
       </div>
@@ -368,19 +359,6 @@ function Banner({ message, tone }: { message: string; tone: "error" | "success" 
         <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0" />
       )}
       <p className="text-[14px] leading-5">{message}</p>
-    </div>
-  );
-}
-
-function Metric({ label, value }: { label: string; value: React.ReactNode }) {
-  return (
-    <div className="rounded bg-surface-container-low px-3 py-2">
-      <p className="text-[12px] font-semibold uppercase text-[#7b8492]">
-        {label}
-      </p>
-      <p className="mt-1 truncate text-[16px] font-bold text-[#151a18]">
-        {value}
-      </p>
     </div>
   );
 }

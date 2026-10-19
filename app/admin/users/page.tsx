@@ -8,11 +8,12 @@ import {
   Plus,
   RefreshCw,
   Save,
-  ShieldCheck,
   UserCog,
   X,
 } from "lucide-react";
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { SidePanel } from "../../../components/side-panel";
+import { RowActions } from "../../../components/row-actions";
 import { PasswordInput } from "../../../components/password-input";
 import { SidebarPageShell } from "../../../components/app-sidebar";
 import { validatePassword } from "../../../lib/auth-client";
@@ -62,6 +63,13 @@ function isNearExpiry(auth: AuthState) {
 
 export default function AdminUsersPage() {
   const [auth, setAuth] = useState<AuthState | null>(null);
+  const [createOpen, setCreateOpen] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const [editUser, setEditUser] = useState<AdminUser | null>(null);
+  const [userSearch, setUserSearch] = useState("");
+  const [roleFilter, setRoleFilter] = useState("");
+  const [statusFilter, setStatusFilter] = useState("");
+  const [rowFeedback, setRowFeedback] = useState<Record<string, { tone: "success" | "error"; message: string }>>({});
   const [users, setUsers] = useState<AdminUser[]>([]);
   const [drafts, setDrafts] = useState<Record<string, UserDraft>>({});
   const [error, setError] = useState<string | null>(null);
@@ -85,12 +93,11 @@ export default function AdminUsersPage() {
   const currentUser = auth?.user ?? null;
   const canManage = currentUser?.role === "admin";
 
-  const userCountLabel = useMemo(() => {
-    if (users.length === 1) {
-      return "1 user";
-    }
-    return `${users.length} users`;
-  }, [users.length]);
+  const filteredUsers = useMemo(() => users.filter(user => {
+    const search = userSearch.trim().toLowerCase();
+    return (!search || `${user.email} ${user.full_name ?? ""}`.toLowerCase().includes(search)) && (!roleFilter || user.role === roleFilter) && (!statusFilter || user.is_active === (statusFilter === "active"));
+  }), [users, userSearch, roleFilter, statusFilter]);
+  const editDraft = editUser ? drafts[editUser.id] ?? userToDraft(editUser) : null;
 
   async function ensureToken() {
     const current = auth ?? readStoredAuth();
@@ -171,6 +178,8 @@ export default function AdminUsersPage() {
     event.preventDefault();
     setError(null);
     setNotice(null);
+    if (creating) return;
+    setCreating(true);
     try {
       const token = await ensureToken();
       await createUser(token, {
@@ -187,10 +196,13 @@ export default function AdminUsersPage() {
         role: "viewer",
         must_change_password: true,
       });
+      setCreateOpen(false);
       setNotice("User created.");
       await load();
     } catch (err) {
       setError(formatError(err));
+    } finally {
+      setCreating(false);
     }
   }
 
@@ -211,10 +223,11 @@ export default function AdminUsersPage() {
         role: draft.role,
         is_active: draft.is_active,
       });
-      setNotice("User updated.");
+      setRowFeedback(current => ({ ...current, [user.id]: { tone: "success", message: "Changes saved." } }));
+      setEditUser(null);
       await load();
     } catch (err) {
-      setError(formatError(err));
+      setRowFeedback(current => ({ ...current, [user.id]: { tone: "error", message: formatError(err) } }));
     } finally {
       setSavingUserId(null);
     }
@@ -240,12 +253,12 @@ export default function AdminUsersPage() {
     try {
       const token = await ensureToken();
       await resetUserPassword(token, resetUser.id, resetPassword, true);
-      setNotice("Password reset. User must change it at next sign-in.");
+      setRowFeedback(current => ({ ...current, [resetUser.id]: { tone: "success", message: "Password reset. A new password is required at next sign-in." } }));
       setResetUser(null);
       setResetPassword("");
       setResetConfirmation("");
     } catch (err) {
-      setError(formatError(err));
+      setResetValidation(formatError(err));
     } finally {
       setResettingUserId(null);
     }
@@ -253,22 +266,12 @@ export default function AdminUsersPage() {
 
   return (
     <SidebarPageShell activePath="/admin/users" user={currentUser}>
-    <main className="min-h-screen bg-surface px-5 py-6 text-on-surface sm:px-8">
+    <main className="min-h-[calc(100vh-72px)] bg-surface px-5 py-6 text-on-surface sm:px-8">
       <div className="mx-auto max-w-6xl">
-        <header className="flex flex-col justify-between gap-4 border-b border-outline-variant pb-6 sm:flex-row sm:items-end">
-          <div>
-            <h1 className="text-[30px] font-bold leading-9 text-primary">
-              User Management
-            </h1>
-            <p className="mt-2 text-[14px] text-[#626b79]">
-              Create accounts, assign roles, disable access, and reset passwords.
-            </p>
-          </div>
-          <div className="inline-flex w-fit items-center gap-2 rounded border border-[#b7d6c4] bg-[#edf8f1] px-3 py-2 text-[13px] font-semibold text-primary">
-            <ShieldCheck className="h-4 w-4" />
-            {currentUser?.email ?? "Admin"}
-          </div>
-        </header>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <p className="text-sm leading-6 text-[#626b79]">Manage accounts, roles, and access.</p>
+          <button className="primary-button" disabled={!canManage || loading} onClick={() => { setError(null); setCreateOpen(true); }} type="button"><Plus className="h-4 w-4" />Add user</button>
+        </div>
 
         {error ? (
           <div className="mt-5 flex items-start gap-3 rounded border border-[#f0c4b6] bg-[#fff5f1] px-4 py-3 text-[#743f2c]">
@@ -284,23 +287,100 @@ export default function AdminUsersPage() {
           </div>
         ) : null}
 
-        <section className="mt-6 grid gap-5 lg:grid-cols-[0.85fr_1.4fr]">
-          <form
-            className="rounded border border-outline-variant bg-white p-5 shadow-tonal"
-            onSubmit={handleCreateUser}
-          >
-            <div className="flex items-center gap-3">
-              <span className="grid h-11 w-11 place-items-center rounded bg-[#edf8f1] text-primary">
-                <Plus className="h-5 w-5" />
-              </span>
-              <div>
-                <h2 className="text-[19px] font-bold text-[#151a18]">
-                  Create User
-                </h2>
-                <p className="text-[14px] text-[#626b79]">Admin only</p>
+        <section className="mt-6">
+
+
+          <section className="rounded-2xl border border-outline-variant/60 bg-white p-5 shadow-sm">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <span className="grid h-11 w-11 place-items-center rounded bg-[#edf8f1] text-primary">
+                  <UserCog className="h-5 w-5" />
+                </span>
+                <div>
+                  <h2 className="text-[19px] font-bold text-[#151a18]">
+                    Accounts
+                  </h2>
+                  <p className="text-[14px] text-[#626b79]">
+                    {loading ? "Loading" : `${filteredUsers.length} of ${users.length} loaded users`}
+                  </p>
+                </div>
               </div>
+              <button
+                className="inline-flex h-10 items-center gap-2 rounded-lg border border-outline-variant/70 bg-white px-3 text-[14px] font-semibold text-[#26384d] hover:bg-surface-container-low disabled:opacity-60"
+                disabled={loading}
+                onClick={() => void load()}
+                type="button"
+              >
+                {loading ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <RefreshCw className="h-4 w-4" />
+                )}
+                Refresh
+              </button>
             </div>
 
+            <div className="mt-5 grid gap-3 sm:grid-cols-[minmax(0,1fr)_180px_160px]">
+              <input className="field" type="search" aria-label="Search loaded users" placeholder="Search by name or email" value={userSearch} onChange={event => setUserSearch(event.target.value)} />
+              <select aria-label="Filter users by role" className="field" value={roleFilter} onChange={event => setRoleFilter(event.target.value)}><option value="">All roles</option>{roles.map(role => <option key={role} value={role}>{role.replaceAll("_", " ")}</option>)}</select>
+              <select aria-label="Filter users by status" className="field" value={statusFilter} onChange={event => setStatusFilter(event.target.value)}><option value="">All statuses</option><option value="active">Active</option><option value="disabled">Disabled</option></select>
+            </div>
+            {!loading && !filteredUsers.length ? <p className="mt-5 rounded-xl bg-[#f6f8f6] p-5 text-sm text-[#626b79]">{users.length ? "No users match these filters." : "No users are available."}</p> : null}
+            <div className="mt-5 overflow-x-auto">
+              <table className="w-full min-w-[760px] border-separate border-spacing-0 text-left">
+                <thead>
+                  <tr className="text-[12px] uppercase text-[#7b8492]">
+                    <th className="border-b border-outline-variant px-3 py-2">
+                      Email
+                    </th>
+                    <th className="border-b border-outline-variant px-3 py-2">
+                      Name
+                    </th>
+                    <th className="border-b border-outline-variant px-3 py-2">
+                      Role
+                    </th>
+                    <th className="border-b border-outline-variant px-3 py-2">
+                      Active
+                    </th>
+                    <th className="border-b border-outline-variant px-3 py-2">
+                      Actions
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filteredUsers.map((user) => {
+                    return (
+                      <tr key={user.id}>
+                        <td className="border-b border-outline-variant/50 px-3 py-4 text-sm">
+                          <span className="font-medium text-[#25392d]">{user.email}</span>
+                          {rowFeedback[user.id] ? <p role="status" className={`mt-1 text-xs ${rowFeedback[user.id].tone === "error" ? "text-[#9b4c34]" : "text-primary"}`}>{rowFeedback[user.id].message}</p> : null}
+                        </td>
+                        <td className="border-b border-outline-variant/50 px-3 py-4 text-sm text-[#626b79]">{user.full_name || "—"}</td>
+                        <td className="border-b border-outline-variant/50 px-3 py-4"><span className="rounded-full bg-[#f0f4f1] px-2.5 py-1 text-xs capitalize text-[#44584b]">{user.role.replaceAll("_", " ")}</span></td>
+                        <td className="border-b border-outline-variant/50 px-3 py-4"><span className={`rounded-full px-2.5 py-1 text-xs ${user.is_active ? "bg-[#edf6ef] text-primary" : "bg-[#f1f1f1] text-[#626b79]"}`}>{user.is_active ? "Active" : "Disabled"}</span></td>
+                        <td className="border-b border-outline-variant/50 px-3 py-4">
+                          <RowActions label={`Actions for ${user.email}`} disabled={!canManage || savingUserId === user.id || resettingUserId === user.id} actions={[
+                            { label: "Edit account and role", run: () => { setDrafts(current => ({ ...current, [user.id]: userToDraft(user) })); setEditUser(user); } },
+                            { label: user.is_active ? "Disable access…" : "Enable access…", run: () => { setDrafts(current => ({ ...current, [user.id]: { ...userToDraft(user), is_active: !user.is_active } })); setEditUser(user); } },
+                            { label: "Reset password…", run: () => { setResetUser(user); setResetPassword(""); setResetConfirmation(""); setResetValidation(null); } },
+                          ]} />
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        </section>
+      </div>
+      {createOpen ? <SidePanel title="Add user" busy={creating} onClose={() => setCreateOpen(false)}>
+          <form
+            className="space-y-1"
+            onSubmit={handleCreateUser}
+          >
+            <p className="text-sm leading-6 text-[#626b79]">Create a department account and choose its initial role.</p>
+            {error ? <p role="alert" className="mt-4 rounded-lg bg-[#fff3ef] p-3 text-sm text-[#743f2c]">{error}</p> : null}
             <TextField
               label="Email"
               onChange={(value) =>
@@ -329,11 +409,11 @@ export default function AdminUsersPage() {
             />
 
             <label className="mt-4 block">
-              <span className="text-[13px] font-semibold uppercase text-[#626b79]">
+              <span className="text-[13px] font-medium text-[#626b79]">
                 Role
               </span>
               <select
-                className="mt-2 h-11 w-full rounded border border-outline-variant bg-white px-3 text-[15px]"
+                className="mt-2 h-11 w-full rounded-lg border border-outline-variant/70 bg-white px-3 text-[15px]"
                 onChange={(event) =>
                   setNewUser((current) => ({
                     ...current,
@@ -366,184 +446,26 @@ export default function AdminUsersPage() {
 
             <button
               className="mt-5 inline-flex h-11 w-full items-center justify-center gap-2 rounded bg-primary px-4 text-[14px] font-semibold text-white transition hover:bg-primary-container disabled:cursor-not-allowed disabled:opacity-55"
-              disabled={!canManage || loading}
+              disabled={!canManage || creating}
               type="submit"
             >
               <Plus className="h-4 w-4" />
-              Create account
+              {creating ? "Creating…" : "Create account"}
             </button>
           </form>
-
-          <section className="rounded border border-outline-variant bg-white p-5 shadow-tonal">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div className="flex items-center gap-3">
-                <span className="grid h-11 w-11 place-items-center rounded bg-[#edf8f1] text-primary">
-                  <UserCog className="h-5 w-5" />
-                </span>
-                <div>
-                  <h2 className="text-[19px] font-bold text-[#151a18]">
-                    Users
-                  </h2>
-                  <p className="text-[14px] text-[#626b79]">
-                    {loading ? "Loading" : userCountLabel}
-                  </p>
-                </div>
-              </div>
-              <button
-                className="inline-flex h-10 items-center gap-2 rounded border border-outline-variant bg-white px-3 text-[14px] font-semibold text-[#26384d] hover:bg-surface-container-low disabled:opacity-60"
-                disabled={loading}
-                onClick={() => void load()}
-                type="button"
-              >
-                {loading ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                ) : (
-                  <RefreshCw className="h-4 w-4" />
-                )}
-                Refresh
-              </button>
-            </div>
-
-            <div className="mt-5 overflow-x-auto">
-              <table className="w-full min-w-[760px] border-separate border-spacing-0 text-left">
-                <thead>
-                  <tr className="text-[12px] uppercase text-[#7b8492]">
-                    <th className="border-b border-outline-variant px-3 py-2">
-                      Email
-                    </th>
-                    <th className="border-b border-outline-variant px-3 py-2">
-                      Name
-                    </th>
-                    <th className="border-b border-outline-variant px-3 py-2">
-                      Role
-                    </th>
-                    <th className="border-b border-outline-variant px-3 py-2">
-                      Active
-                    </th>
-                    <th className="border-b border-outline-variant px-3 py-2">
-                      Actions
-                    </th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {users.map((user) => {
-                    const draft = drafts[user.id] ?? userToDraft(user);
-                    const saving = savingUserId === user.id;
-                    const resetting = resettingUserId === user.id;
-
-                    return (
-                      <tr key={user.id}>
-                        <td className="border-b border-outline-variant/60 px-3 py-3">
-                          <input
-                            className="h-10 w-full rounded border border-outline-variant px-2 text-[14px]"
-                            onChange={(event) =>
-                              setDrafts((current) => ({
-                                ...current,
-                                [user.id]: {
-                                  ...draft,
-                                  email: event.target.value,
-                                },
-                              }))
-                            }
-                            value={draft.email}
-                          />
-                        </td>
-                        <td className="border-b border-outline-variant/60 px-3 py-3">
-                          <input
-                            className="h-10 w-full rounded border border-outline-variant px-2 text-[14px]"
-                            onChange={(event) =>
-                              setDrafts((current) => ({
-                                ...current,
-                                [user.id]: {
-                                  ...draft,
-                                  full_name: event.target.value,
-                                },
-                              }))
-                            }
-                            value={draft.full_name}
-                          />
-                        </td>
-                        <td className="border-b border-outline-variant/60 px-3 py-3">
-                          <select
-                            className="h-10 w-full rounded border border-outline-variant bg-white px-2 text-[14px]"
-                            onChange={(event) =>
-                              setDrafts((current) => ({
-                                ...current,
-                                [user.id]: {
-                                  ...draft,
-                                  role: event.target.value as Role,
-                                },
-                              }))
-                            }
-                            value={draft.role}
-                          >
-                            {roles.map((role) => (
-                              <option key={role} value={role}>
-                                {role.replaceAll("_", " ")}
-                              </option>
-                            ))}
-                          </select>
-                        </td>
-                        <td className="border-b border-outline-variant/60 px-3 py-3">
-                          <input
-                            checked={draft.is_active}
-                            onChange={(event) =>
-                              setDrafts((current) => ({
-                                ...current,
-                                [user.id]: {
-                                  ...draft,
-                                  is_active: event.target.checked,
-                                },
-                              }))
-                            }
-                            type="checkbox"
-                          />
-                        </td>
-                        <td className="border-b border-outline-variant/60 px-3 py-3">
-                          <div className="flex gap-2">
-                            <button
-                              className="grid h-10 w-10 place-items-center rounded border border-outline-variant text-[#26384d] hover:bg-surface-container-low disabled:opacity-60"
-                              disabled={!canManage || saving}
-                              onClick={() => void handleSave(user)}
-                              title="Save user"
-                              type="button"
-                            >
-                              {saving ? (
-                                <Loader2 className="h-4 w-4 animate-spin" />
-                              ) : (
-                                <Save className="h-4 w-4" />
-                              )}
-                            </button>
-                            <button
-                              className="grid h-10 w-10 place-items-center rounded border border-outline-variant text-[#26384d] hover:bg-surface-container-low disabled:opacity-60"
-                              disabled={!canManage || resetting}
-                              aria-label={`Reset password for ${user.email}`}
-                              onClick={() => {
-                                setResetUser(user);
-                                setResetPassword("");
-                                setResetConfirmation("");
-                                setResetValidation(null);
-                              }}
-                              title="Reset password"
-                              type="button"
-                            >
-                              {resetting ? (
-                                <Loader2 className="h-4 w-4 animate-spin" />
-                              ) : (
-                                <KeyRound className="h-4 w-4" />
-                              )}
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          </section>
-        </section>
-      </div>
+      </SidePanel> : null}
+      {editUser && editDraft ? <SidePanel title="Edit user" busy={savingUserId === editUser.id} onClose={() => setEditUser(null)}>
+        <p className="text-sm text-[#626b79]">{editUser.email}</p>
+        <form onSubmit={event => { event.preventDefault(); void handleSave(editUser); }}>
+          {rowFeedback[editUser.id]?.tone === "error" ? <p role="alert" className="mt-4 rounded-lg bg-[#fff3ef] p-3 text-sm text-[#743f2c]">{rowFeedback[editUser.id].message}</p> : null}
+          <TextField label="Email" type="email" required value={editDraft.email} onChange={email => setDrafts(current => ({ ...current, [editUser.id]: { ...editDraft, email } }))} />
+          <TextField label="Full name" value={editDraft.full_name} onChange={full_name => setDrafts(current => ({ ...current, [editUser.id]: { ...editDraft, full_name } }))} />
+          <label className="mt-4 block text-sm font-medium">Role<select className="field mt-2" value={editDraft.role} onChange={event => setDrafts(current => ({ ...current, [editUser.id]: { ...editDraft, role: event.target.value as Role } }))}>{roles.map(role => <option key={role} value={role}>{role.replaceAll("_", " ")}</option>)}</select></label>
+          <label className="mt-5 flex min-h-11 items-center gap-3 text-sm"><input className="h-4 w-4 accent-primary" type="checkbox" checked={editDraft.is_active} onChange={event => setDrafts(current => ({ ...current, [editUser.id]: { ...editDraft, is_active: event.target.checked } }))} />Account enabled</label>
+          {!editDraft.is_active ? <p className="mt-2 rounded-lg bg-[#fff3ef] p-3 text-sm text-[#743f2c]">Saving will disable sign-in for this account.</p> : null}
+          <button className="primary-button mt-6 w-full" disabled={savingUserId === editUser.id} type="submit">{savingUserId === editUser.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}Save changes</button>
+        </form>
+      </SidePanel> : null}
       {resetUser ? (
         <div
           className="fixed inset-0 z-50 grid place-items-center bg-black/35 p-4"
@@ -599,7 +521,7 @@ function TextField({
 }) {
   return (
     <label className="mt-4 block">
-      <span className="text-[13px] font-semibold uppercase text-[#626b79]">
+      <span className="text-[13px] font-medium text-[#626b79]">
         {label}
       </span>
       {type === "password" ? (

@@ -47,14 +47,26 @@ a:focus-visible {
   outline-offset: 2px;
 }
 
+/* One corner radius for rectangular surfaces and controls in document workspaces. */
+.document-workspace {
+  --document-radius: 12px;
+}
+
+.document-workspace :is(.rounded, .rounded-sm, .rounded-md, .rounded-lg, .rounded-xl, .rounded-2xl, .field, .primary-button, .secondary-button, .filter-chip) {
+  border-radius: var(--document-radius);
+}
+
 @layer components {
   .field {
-    @apply min-h-11 w-full rounded border border-outline-variant bg-white px-3 py-2 text-[15px] text-on-surface disabled:cursor-not-allowed disabled:opacity-60;
+    @apply min-h-11 w-full rounded-lg border border-outline-variant/70 bg-white px-3 py-2 text-[15px] text-on-surface disabled:cursor-not-allowed disabled:opacity-60;
   }
   .primary-button {
-    @apply inline-flex min-h-11 items-center justify-center gap-2 rounded bg-primary px-4 py-2 text-sm font-bold text-white transition hover:bg-primary-container disabled:cursor-not-allowed disabled:opacity-50;
+    @apply inline-flex min-h-11 items-center justify-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-white transition hover:bg-primary-container disabled:cursor-not-allowed disabled:opacity-50;
   }
   .secondary-button {
-    @apply inline-flex min-h-11 items-center justify-center gap-2 rounded border border-outline-variant bg-white px-4 py-2 text-sm font-bold text-primary transition hover:bg-surface-container-low disabled:cursor-not-allowed disabled:opacity-50;
+    @apply inline-flex min-h-11 items-center justify-center gap-2 rounded-lg border border-outline-variant/70 bg-white px-4 py-2 text-sm font-medium text-primary transition hover:bg-surface-container-low disabled:cursor-not-allowed disabled:opacity-50;
+  }
+  .filter-chip {
+    @apply inline-flex min-h-11 max-w-full items-center gap-2 rounded-full bg-[#edf4ef] px-3 py-1.5 text-xs font-medium text-primary transition hover:bg-[#e0ece4];
   }
 }

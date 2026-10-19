@@ -9,7 +9,7 @@ const publicSans = Public_Sans({
 });
 
 export const metadata: Metadata = {
-  title: "Aranyabodh",
+  title: "Aranyabodh AI",
   description: "Aranyabodh forestry RAG assistant chat interface.",
 };
 

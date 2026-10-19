@@ -2,25 +2,23 @@
 
 import {
   AlertCircle,
+  ArrowDown,
   CheckCircle2,
   ChevronDown,
   Copy,
-  Database,
   KeyRound,
   Loader2,
-  LogOut,
-  Menu,
   RefreshCw,
-  Send,
-  Settings,
-  ShieldCheck,
   Trash2,
-  Upload,
   X,
-  type LucideIcon,
 } from "lucide-react";
 import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
+import { groupChatSessions } from "../lib/chat-history";
+import { ChatComposer } from "../components/chat-composer";
+import { BrandLogo } from "../components/brand-logo";
 import { PasswordInput } from "../components/password-input";
+import { SystemStatusPanel, isConfigReady } from "../components/system-status-panel";
+import { AppHeader } from "../components/app-header";
 import { AppSidebar } from "../components/app-sidebar";
 import { SourceDrawer } from "../components/source-drawer";
 import {
@@ -34,7 +32,6 @@ import {
   validatePassword,
 } from "../lib/auth-client";
 import {
-  API_BASE_URL,
   ApiError,
   AuthState,
   AuthUser,
@@ -396,11 +393,8 @@ function LoginPage({
     <main className="grid min-h-screen bg-surface px-5 py-8 text-on-surface lg:grid-cols-[1fr_440px] lg:px-0 lg:py-0">
       <section className="hidden min-h-screen items-center bg-primary px-12 text-white lg:flex">
         <div className="max-w-2xl">
-          <div className="grid h-16 w-16 place-items-center rounded-lg bg-white/10">
-            <ShieldCheck className="h-9 w-9" />
-          </div>
-          <h1 className="mt-8 text-[42px] font-bold leading-[1.12]">
-            Aranyabodh
+          <h1 className="w-fit rounded-xl bg-white p-5">
+            <BrandLogo className="h-auto w-[180px]" />
           </h1>
           <p className="mt-5 max-w-xl text-[18px] leading-7 text-white/78">
             Find reliable answers in department documents and open the source
@@ -416,7 +410,7 @@ function LoginPage({
         >
           <div className="flex items-center gap-3">
             <span className="grid h-11 w-11 place-items-center rounded bg-[#edf8f1] text-primary">
-              <ShieldCheck className="h-6 w-6" />
+              <BrandLogo decorative className="h-8 w-8" />
             </span>
             <div>
               <h2 className="text-[24px] font-bold text-primary">Sign in</h2>
@@ -748,10 +742,6 @@ function RagAssistant({
     }
   }, [activeSessionId, loadMessages]);
 
-  useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-  }, [messages, pending.send]);
-
   async function createChatSession(title?: string) {
     const token = await ensureAuth();
     const session = await createSession(token, title);
@@ -841,7 +831,7 @@ function RagAssistant({
             return false;
           }
           if (err instanceof DOMException && err.name === "AbortError") return false;
-          handleError(err, "Unable to confirm whether the message completed. Retry with the same request key or discard it.");
+          handleError(err, "Your message is saved, but the response could not be confirmed. Retry to check for a response, or discard it to continue.");
           return false;
         }
       }
@@ -999,13 +989,7 @@ function RagAssistant({
     }
   }
 
-  const configReady = Boolean(
-    config?.gemini_api_key_configured &&
-    config?.supabase_url_configured &&
-    config?.supabase_service_role_key_configured &&
-    config?.supabase_url_valid &&
-    config?.jwt_secret_key_configured,
-  );
+  const configReady = isConfigReady(config);
 
   return (
     <>
@@ -1042,7 +1026,9 @@ function RagAssistant({
       </AppSidebar>
 
       <section className="min-h-screen transition-[padding] duration-200 lg:pl-[var(--app-sidebar-width)]">
-        <Header
+        <AppHeader
+          title="Chat"
+          health={health}
           configReady={configReady}
           onAdminClick={() => setAdminOpen(!adminOpen)}
           onLogout={logoutAndClearPending}
@@ -1051,11 +1037,11 @@ function RagAssistant({
         />
 
         {adminOpen ? (
-          <AdminPanel
+          <SystemStatusPanel
             config={config}
             health={health}
             onRefresh={() => void loadConfig()}
-            pending={pending}
+            refreshing={pending.config}
             user={user}
           />
         ) : null}
@@ -1065,6 +1051,7 @@ function RagAssistant({
         ) : null}
 
         <ChatWorkspace
+          sessionId={activeSessionId}
           bottomRef={bottomRef}
           deletingMessageId={deletingMessageId}
           messages={messages}
@@ -1108,7 +1095,7 @@ function ChatHistory({
   sessions: ChatSession[];
 }) {
   return (
-      <section className="mt-7 flex min-h-0 flex-1 flex-col px-7 pb-4">
+      <section aria-label="Recent chats" className="mt-6 flex min-h-0 flex-1 flex-col border-t border-outline-variant/50 px-5 pb-4 pt-5">
         <div className="flex items-center justify-between">
           <p className="text-[14px] font-semibold uppercase leading-5 text-[#7b8492]">
             Recent chats
@@ -1123,20 +1110,26 @@ function ChatHistory({
               Your conversations will appear here.
             </p>
           ) : null}
-          {sessions.map((session) => {
+          {groupChatSessions(sessions).map((group) => (
+            <section key={group.label} aria-label={group.label} className="pt-2">
+              <h2 className="mb-2 px-3 text-[11px] font-semibold uppercase tracking-wider text-[#7b8492]">{group.label}</h2>
+              {group.sessions.map((session) => {
             const deleting = deletingSessionId === session.id;
 
             return (
               <div
-                className={`flex w-full items-start gap-2 rounded px-3 py-3 text-left transition ${
+                className={`group flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left transition ${
                   session.id === activeSessionId
-                    ? "bg-[#e8f8ef] text-primary"
+                    ? "bg-[#eaf3ed] text-primary"
                     : "hover:bg-surface-container-low"
                 }`}
                 key={session.id}
               >
                 <button
-                  className="min-w-0 flex-1 text-left"
+                  className="min-h-11 min-w-0 flex-1 rounded text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
+                  data-sidebar-select
+                  aria-current={session.id === activeSessionId ? "true" : undefined}
+                  title={session.title || "Untitled chat"}
                   disabled={deleting}
                   onClick={() => onSelectSession(session.id)}
                   type="button"
@@ -1150,7 +1143,7 @@ function ChatHistory({
                 </button>
                 <button
                   aria-label={`Delete ${session.title || "chat"}`}
-                  className="grid h-8 w-8 shrink-0 place-items-center rounded text-[#8d5a4a] transition hover:bg-[#fff3ef] disabled:cursor-not-allowed disabled:opacity-60"
+                  className={`grid h-11 w-11 shrink-0 place-items-center rounded-lg text-[#8d5a4a] transition hover:bg-[#fff3ef] focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary disabled:cursor-not-allowed disabled:opacity-60 ${deleting ? "" : "[@media(hover:hover)_and_(pointer:fine)]:opacity-0 [@media(hover:hover)_and_(pointer:fine)]:group-hover:opacity-100 [@media(hover:hover)_and_(pointer:fine)]:group-focus-within:opacity-100"}`}
                   disabled={deleting}
                   onClick={() => onDeleteSession(session.id)}
                   title="Delete chat"
@@ -1164,242 +1157,11 @@ function ChatHistory({
                 </button>
               </div>
             );
-          })}
+              })}
+            </section>
+          ))}
         </div>
       </section>
-  );
-}
-
-function Header({
-  configReady,
-  onAdminClick,
-  onLogout,
-  onMenuClick,
-  user,
-}: {
-  configReady: boolean;
-  onAdminClick: () => void;
-  onLogout: () => void;
-  onMenuClick: () => void;
-  user: AuthUser;
-}) {
-  return (
-    <header className="sticky top-0 z-20 flex h-[89px] items-center justify-between border-b border-outline-variant/60 bg-white px-5 sm:px-8 lg:px-8">
-      <div className="flex min-w-0 items-center gap-4">
-        <button
-          aria-label="Open sidebar"
-          className="grid h-10 w-10 shrink-0 place-items-center rounded border border-outline-variant text-[#5f6875] lg:hidden"
-          onClick={onMenuClick}
-          type="button"
-        >
-          <Menu className="h-5 w-5" strokeWidth={2.2} />
-        </button>
-        <a className="truncate text-[21px] font-bold leading-8 text-primary hover:text-primary-container sm:text-[24px]" href="/">
-          Aranyabodh
-        </a>
-      </div>
-      <div className="flex items-center gap-3 text-[#626b79] sm:gap-4">
-        <StatusPill ready={configReady} />
-        <button
-          aria-label="System settings"
-          className="grid h-10 w-10 place-items-center rounded border border-outline-variant text-current transition hover:bg-surface-container-low"
-          onClick={onAdminClick}
-          type="button"
-        >
-          <Settings className="h-5 w-5" strokeWidth={2.1} />
-        </button>
-        <button
-          aria-label="Sign out"
-          className="grid h-10 w-10 place-items-center rounded border border-outline-variant text-current transition hover:bg-surface-container-low"
-          onClick={onLogout}
-          title={`Sign out ${user.email}`}
-          type="button"
-        >
-          <LogOut className="h-5 w-5" strokeWidth={2.1} />
-        </button>
-      </div>
-    </header>
-  );
-}
-
-function StatusPill({ ready }: { ready: boolean }) {
-  return (
-    <span
-      className={`hidden h-9 items-center gap-2 rounded border px-3 text-[13px] font-semibold uppercase sm:inline-flex ${
-        ready
-          ? "border-[#b7d6c4] bg-[#edf8f1] text-primary"
-          : "border-[#e0c0b7] bg-[#fff3ef] text-[#743f2c]"
-      }`}
-    >
-      {ready ? (
-        <CheckCircle2 className="h-4 w-4" />
-      ) : (
-        <AlertCircle className="h-4 w-4" />
-      )}
-      {ready ? "Ready" : "Needs setup"}
-    </span>
-  );
-}
-
-function AdminPanel({
-  config,
-  health,
-  onRefresh,
-  pending,
-  user,
-}: {
-  config: ConfigStatus | null;
-  health: string;
-  onRefresh: () => void;
-  pending: PendingState;
-  user: AuthUser;
-}) {
-  const canManage = canManageDocuments(user);
-
-  return (
-    <section className="border-b border-outline-variant/60 bg-white px-5 py-5 sm:px-8">
-      <div className="mx-auto grid max-w-[1168px] gap-4 xl:grid-cols-[1.1fr_0.9fr]">
-        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-          <StatusCard
-            icon={ShieldCheck}
-            label="Role"
-            status={canManage ? "ok" : "limited"}
-            value={user.role}
-          />
-          <StatusCard
-            icon={Database}
-            label="Supabase"
-            status={
-              config?.supabase_url_configured &&
-              config.supabase_service_role_key_configured &&
-              config.supabase_url_valid
-                ? "ok"
-                : "missing"
-            }
-            value={config?.supabase_url_hint || "URL/service role pending"}
-          />
-          <StatusCard
-            icon={ShieldCheck}
-            label="Auth"
-            status={config?.jwt_secret_key_configured ? "ok" : "missing"}
-            value={config?.auth_disabled ? "Disabled" : "JWT enabled"}
-          />
-        </div>
-
-        <div className="rounded border border-outline-variant/70 bg-surface-container-lowest p-4">
-          <div className="flex flex-wrap items-center gap-2">
-            <AdminButton
-              disabled={pending.config}
-              icon={RefreshCw}
-              label="Refresh"
-              loading={pending.config}
-              onClick={onRefresh}
-            />
-            <AdminButton
-              disabled={!canManage}
-              icon={Upload}
-              label="Document processing"
-              loading={false}
-              onClick={() => window.location.assign("/ingestion")}
-            />
-          </div>
-
-          <div className="mt-4 grid gap-3 text-[13px] leading-5 text-[#4e5966] sm:grid-cols-3">
-            <Metric
-              label="Backend"
-              value={health === "ok" ? API_BASE_URL : "Unavailable"}
-            />
-            <Metric label="Documents" value="Open document library" />
-            <Metric label="Processing" value="Automatic after upload" />
-          </div>
-        </div>
-      </div>
-    </section>
-  );
-}
-
-function StatusCard({
-  icon: Icon,
-  label,
-  pending = false,
-  status,
-  value,
-}: {
-  icon: LucideIcon;
-  label: string;
-  pending?: boolean;
-  status: string;
-  value: string;
-}) {
-  const ok = status === "ok";
-
-  return (
-    <div className="rounded border border-outline-variant/70 bg-surface-container-lowest p-4">
-      <div className="flex items-center gap-3">
-        <span
-          className={`grid h-9 w-9 place-items-center rounded ${
-            ok ? "bg-[#edf8f1] text-primary" : "bg-[#fff3ef] text-[#743f2c]"
-          }`}
-        >
-          {pending ? (
-            <Loader2 className="h-5 w-5 animate-spin" />
-          ) : (
-            <Icon className="h-5 w-5" />
-          )}
-        </span>
-        <div className="min-w-0">
-          <p className="text-[13px] font-semibold uppercase leading-4 text-[#7b8492]">
-            {label}
-          </p>
-          <p className="truncate text-[15px] font-semibold leading-5 text-[#151a18]">
-            {value}
-          </p>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function AdminButton({
-  disabled,
-  icon: Icon,
-  label,
-  loading,
-  onClick,
-}: {
-  disabled: boolean;
-  icon: LucideIcon;
-  label: string;
-  loading: boolean;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      className="inline-flex h-10 items-center gap-2 rounded border border-outline-variant bg-white px-3 text-[14px] font-semibold text-[#26384d] transition hover:bg-surface-container-low disabled:cursor-not-allowed disabled:opacity-60"
-      disabled={disabled}
-      onClick={onClick}
-      type="button"
-    >
-      {loading ? (
-        <Loader2 className="h-4 w-4 animate-spin" />
-      ) : (
-        <Icon className="h-4 w-4" />
-      )}
-      {label}
-    </button>
-  );
-}
-
-function Metric({ label, value }: { label: string; value: React.ReactNode }) {
-  return (
-    <div className="rounded bg-surface-container-low px-3 py-2">
-      <p className="text-[12px] font-semibold uppercase text-[#7b8492]">
-        {label}
-      </p>
-      <p className="mt-1 truncate text-[16px] font-bold text-[#151a18]">
-        {value}
-      </p>
-    </div>
   );
 }
 
@@ -1469,6 +1231,7 @@ function ErrorBanner({
 }
 
 function ChatWorkspace({
+  sessionId,
   bottomRef,
   deletingMessageId,
   messages,
@@ -1483,6 +1246,7 @@ function ChatWorkspace({
   retryingMessageId,
   searchQuery,
 }: {
+  sessionId: string | null;
   bottomRef: React.RefObject<HTMLDivElement>;
   deletingMessageId: string | null;
   messages: ChatMessage[];
@@ -1497,12 +1261,52 @@ function ChatWorkspace({
   retryingMessageId: string | null;
   searchQuery: string | null;
 }) {
-  return (
-    <div className="relative min-h-[calc(100vh-89px)] pb-[130px]">
-      <div className="mx-auto w-full max-w-[1168px] px-5 pt-10 sm:px-8 lg:pt-12">
-        {messages.length === 0 ? <AssistantIntro /> : null}
+  const [draft, setDraft] = useState("");
+  const [composerHeight, setComposerHeight] = useState(112);
+  const [showJump, setShowJump] = useState(false);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+  const followLatest = useRef(true);
+  const previousSession = useRef(sessionId);
 
-        <div className="space-y-7">
+  const jumpToLatest = useCallback(() => {
+    followLatest.current = true;
+    setShowJump(false);
+    window.scrollTo({ top: document.documentElement.scrollHeight, behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
+  }, []);
+
+  useEffect(() => {
+    const update = () => {
+      const distance = document.documentElement.scrollHeight - window.scrollY - window.innerHeight;
+      followLatest.current = distance < 160;
+      setShowJump(!followLatest.current);
+    };
+    window.addEventListener("scroll", update, { passive: true });
+    window.addEventListener("resize", update);
+    return () => {
+      window.removeEventListener("scroll", update);
+      window.removeEventListener("resize", update);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (previousSession.current !== sessionId) {
+      previousSession.current = sessionId;
+      followLatest.current = true;
+    }
+    if (followLatest.current) {
+      window.scrollTo({ top: document.documentElement.scrollHeight, behavior: "auto" });
+      setShowJump(false);
+    } else {
+      setShowJump(document.documentElement.scrollHeight - window.scrollY - window.innerHeight >= 160);
+    }
+  }, [messages, pending.send, sessionId, composerHeight]);
+
+  return (
+    <div className="relative min-h-[calc(100vh-72px)]" style={{ paddingBottom: composerHeight + 32 }}>
+      <div className="mx-auto w-full max-w-[904px] px-5 pt-10 sm:px-8 lg:pt-12">
+        {messages.length === 0 ? <AssistantIntro onPromptSelect={(prompt) => { setDraft(prompt); inputRef.current?.focus(); }} /> : null}
+
+        <div className="space-y-10">
           {messages.map((message) =>
             message.role === "user" ? (
               <UserMessage
@@ -1525,7 +1329,7 @@ function ChatWorkspace({
           {pending.send ? <TypingIndicator /> : null}
           {pendingSubmission && !pending.send ? (
             <div className="ml-auto flex max-w-[840px] flex-wrap items-center justify-between gap-3 rounded border border-[#e0cfa9] bg-[#fff9e9] px-4 py-3 text-sm text-[#6c551d]" role="status">
-              <span>Completion could not be confirmed. Retrying will use the same request key.</span>
+              <span>Your message is saved. Retry to check for a response.</span>
               <span className="flex gap-2">
                 <button className="rounded border border-[#c8aa67] bg-white px-3 py-2 font-semibold" onClick={onRetryPending} type="button">Retry</button>
                 <button className="rounded px-3 py-2 font-semibold underline" onClick={onDiscardPending} type="button">Discard</button>
@@ -1537,22 +1341,29 @@ function ChatWorkspace({
         </div>
       </div>
 
-      <ChatInput
+      {showJump && messages.length > 0 ? (
+        <div className="pointer-events-none fixed inset-x-0 z-20 flex justify-center lg:left-[var(--app-sidebar-width)]" style={{ bottom: composerHeight + 12 }}>
+          <button className="pointer-events-auto inline-flex min-h-11 items-center gap-2 rounded-full border border-outline-variant bg-white px-4 text-sm font-medium text-primary shadow-sm hover:bg-[#edf8f1]" onClick={jumpToLatest} type="button"><ArrowDown className="h-4 w-4" />Jump to latest</button>
+        </div>
+      ) : null}
+      <ChatComposer
+        value={draft}
+        onChange={setDraft}
+        inputRef={inputRef}
+        onHeightChange={setComposerHeight}
         disabled={pending.send || pendingSubmission != null}
-        onSend={onSend}
+        sending={pending.send}
+        onSend={(message) => { followLatest.current = true; return onSend(message); }}
       />
     </div>
   );
 }
 
-function AssistantIntro() {
+function AssistantIntro({ onPromptSelect }: { onPromptSelect: (prompt: string) => void }) {
   return (
     <section className="mx-auto mb-12 max-w-[730px] text-center">
-      <div className="mx-auto grid h-20 w-20 place-items-center rounded-lg bg-primary-container text-on-primary-container shadow-tonal">
-        <ShieldCheck className="h-10 w-10" strokeWidth={2.2} />
-      </div>
-      <h3 className="mt-6 text-[22px] font-medium leading-8 text-[#151a18]">
-        Aranyabodh
+      <h3>
+        <BrandLogo className="mx-auto h-auto w-28 max-w-full" />
       </h3>
       <p className="mt-3 text-[17px] leading-6 text-[#2d3331]">
         Ask about forestry rules, procedures, and department records. You can
@@ -1563,15 +1374,7 @@ function AssistantIntro() {
           <button
             className="rounded-full border border-outline-variant bg-white px-4 py-2 text-[13px] font-semibold text-primary transition hover:bg-[#edf8f1]"
             key={prompt}
-            onClick={() => {
-              const input = document.querySelector<HTMLTextAreaElement>('[aria-label="Chat prompt"]');
-              if (input) {
-                const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set;
-                setter?.call(input, prompt);
-                input.dispatchEvent(new Event("input", { bubbles: true }));
-                input.focus();
-              }
-            }}
+            onClick={() => onPromptSelect(prompt)}
             type="button"
           >
             {prompt}
@@ -1600,7 +1403,7 @@ function UserMessage({
   const pendingMessage = message.metadata?.pending === true;
 
   return (
-    <div className="group ml-auto max-w-[840px] rounded-lg bg-surface-container-low px-5 py-[18px] text-[18px] leading-7 text-[#111516] sm:px-6">
+    <div className="group ml-auto max-w-[min(100%,680px)] rounded-2xl bg-[#edf2ee] px-4 py-3 text-[16px] leading-7 text-[#202625] sm:px-5">
       <div className="flex items-start gap-3">
         <p className="min-w-0 flex-1 whitespace-pre-wrap">{message.content}</p>
         <div className="flex shrink-0 items-center gap-1 opacity-100 transition sm:opacity-0 sm:group-hover:opacity-100 sm:focus-within:opacity-100">
@@ -1656,6 +1459,7 @@ function AssistantMessage({
   const unsuccessful = outcome ? isAbstentionOutcome(outcome) : abstained;
   const confidence = messageConfidence(message);
   const [copied, setCopied] = useState(false);
+  const [sourcesExpanded, setSourcesExpanded] = useState(false);
   const responseCitations = message.metadata?.cited_sources;
   const citedSources = Array.isArray(responseCitations)
     ? (responseCitations as Source[])
@@ -1674,21 +1478,21 @@ function AssistantMessage({
   }
 
   return (
-    <div className="grid grid-cols-[42px_minmax(0,1fr)] gap-4 sm:grid-cols-[50px_minmax(0,960px)] sm:gap-5">
+    <div className="grid grid-cols-[32px_minmax(0,1fr)] gap-3 sm:gap-4">
       <div
-        className={`grid h-[42px] w-[42px] place-items-center rounded-lg text-white sm:h-[50px] sm:w-[50px] ${
-          unsuccessful ? "bg-[#8d5a4a]" : "bg-primary"
+        className={`grid h-8 w-8 place-items-center rounded-lg text-white ${
+          unsuccessful ? "bg-[#fff5f1]" : "bg-[#edf8f1]"
         }`}
       >
-        <ShieldCheck className="h-6 w-6" strokeWidth={2.1} />
+        <BrandLogo className="h-6 w-6" />
       </div>
 
-      <div>
+      <div className="min-w-0">
         <article
-          className={`rounded-lg border px-5 py-[18px] text-[18px] leading-7 text-[#202625] shadow-tonal sm:px-[22px] ${
+          className={`min-w-0 rounded-xl px-1 py-1 text-[16px] leading-7 text-[#202625] sm:px-2 ${
             unsuccessful
-              ? "border-[#e5bda9] bg-[#fff8f5]"
-              : "border-[#d9dee4] bg-white"
+              ? "border border-[#e5bda9] bg-[#fff8f5] p-4"
+              : "bg-transparent"
           }`}
         >
           <div className="mb-3 flex items-start justify-between gap-3">
@@ -1704,7 +1508,7 @@ function AssistantMessage({
             ) : abstained ? (
               <span className="text-[13px] font-semibold uppercase text-[#8d5a4a]">Historical abstention</span>
             ) : (
-              <span aria-hidden="true" />
+              <span className="pt-1.5 text-[12px] font-medium text-[#7d8780]">Aranyabodh AI</span>
             )}
             <button
               aria-label="Copy assistant response"
@@ -1737,7 +1541,7 @@ function AssistantMessage({
             <span className="text-[13px] font-semibold uppercase leading-4 text-[#8f99a8]">
               Sources
             </span>
-            {citedSources.map((source) => (
+            {(sourcesExpanded ? citedSources : citedSources.slice(0, 3)).map((source) => (
               <SourceChip
                 key={`${source.source}-${source.chunk_index}-${source.score}`}
                 label={source.display_source}
@@ -1746,6 +1550,7 @@ function AssistantMessage({
                 source={source}
               />
             ))}
+            {citedSources.length > 3 ? <button aria-expanded={sourcesExpanded} className="min-h-11 rounded-lg px-3 text-[13px] font-semibold text-primary hover:bg-[#edf8f1]" onClick={() => setSourcesExpanded((expanded) => !expanded)} type="button">{sourcesExpanded ? "Show fewer" : `Show all ${citedSources.length} sources`}</button> : null}
           </div>
         ) : null}
         {unsuccessful && message.sources?.length ? (
@@ -1775,7 +1580,7 @@ function SourceChip({
   return (
     <button
       aria-label={`Source ${number ?? "citation"}: ${label}, ${pageRange(source)}`}
-      className="grid min-h-11 max-w-full grid-cols-[auto_minmax(0,1fr)] items-center gap-x-2 rounded-sm border border-[#dfbaa9] bg-tertiary-fixed px-3 py-2 text-left text-[14px] leading-4 text-on-tertiary-fixed transition hover:bg-[#f4d0bf] sm:inline-flex"
+      className="grid min-h-11 max-w-full grid-cols-[auto_minmax(0,1fr)] items-center gap-x-2 rounded-lg border border-[#dde4de] bg-[#f0f4f1] px-3 py-2 text-left text-[14px] leading-4 text-[#44584b] transition hover:bg-[#e5ede7] sm:inline-flex"
       onClick={onClick}
       type="button"
     >
@@ -1790,11 +1595,11 @@ function SourceChip({
 
 function TypingIndicator() {
   return (
-    <div className="grid grid-cols-[42px_minmax(0,1fr)] gap-4 sm:grid-cols-[50px_minmax(0,960px)] sm:gap-5">
-      <div className="grid h-[42px] w-[42px] place-items-center rounded-lg bg-primary text-white sm:h-[50px] sm:w-[50px]">
-        <ShieldCheck className="h-6 w-6" strokeWidth={2.1} />
+    <div className="grid grid-cols-[32px_minmax(0,1fr)] gap-3 sm:gap-4">
+      <div className="grid h-8 w-8 place-items-center rounded-lg bg-[#edf8f1] text-white">
+        <BrandLogo className="h-6 w-6" />
       </div>
-      <div className="inline-flex w-fit items-center gap-3 rounded-lg border border-[#d9dee4] bg-white px-5 py-4 text-[15px] font-semibold text-[#626b79] shadow-tonal">
+      <div className="inline-flex w-fit items-center gap-3 rounded-xl bg-[#f0f4f1] px-4 py-3 text-[14px] font-medium text-[#626b79]">
         <Loader2 className="h-4 w-4 animate-spin" />
         Searching and analyzing the documents…
       </div>
@@ -1810,66 +1615,5 @@ function DebugDetails({ searchQuery }: { searchQuery: string }) {
       </summary>
       <p className="mt-2 whitespace-pre-wrap">{searchQuery}</p>
     </details>
-  );
-}
-
-function ChatInput({
-  disabled,
-  onSend,
-}: {
-  disabled: boolean;
-  onSend: (message: string) => Promise<boolean>;
-}) {
-  const [value, setValue] = useState("");
-  const canSend = value.trim().length > 0 && !disabled;
-
-  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (!canSend) {
-      return;
-    }
-    const sent = await onSend(value);
-    if (sent) {
-      setValue("");
-    }
-  }
-
-  return (
-    <div className="fixed bottom-0 left-0 right-0 z-20 border-t border-transparent bg-surface/95 px-4 pb-3 pt-2 transition-[left] duration-200 sm:px-6 lg:left-[var(--app-sidebar-width)]">
-      <div className="mx-auto max-w-[1120px]">
-        <form
-          className="flex min-h-[72px] items-center gap-3 rounded-lg border border-[#d9dee4] bg-white px-4 py-2.5 shadow-tonal sm:gap-4 sm:px-5"
-          onSubmit={handleSubmit}
-        >
-          <textarea
-            aria-label="Chat prompt"
-            className="max-h-40 min-h-11 min-w-0 flex-1 resize-y border-0 bg-transparent py-1.5 text-[17px] leading-7 text-on-surface placeholder:text-[#6e7787] focus:outline-none sm:text-[19px]"
-            disabled={disabled}
-            onChange={(event) => setValue(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter" && !event.shiftKey) {
-                event.preventDefault();
-                event.currentTarget.form?.requestSubmit();
-              }
-            }}
-            placeholder="Ask about forestry laws, permits, habitats, or source documents…"
-            rows={1}
-            value={value}
-          />
-          <button
-            aria-label="Send prompt"
-            className="grid h-11 w-11 shrink-0 place-items-center rounded bg-primary text-white transition hover:bg-primary-container disabled:cursor-not-allowed disabled:opacity-55"
-            disabled={!canSend}
-            type="submit"
-          >
-            {disabled ? (
-              <Loader2 className="h-6 w-6 animate-spin" strokeWidth={2.2} />
-            ) : (
-              <Send className="h-6 w-6" strokeWidth={2.2} />
-            )}
-          </button>
-        </form>
-      </div>
-    </div>
   );
 }

@@ -201,6 +201,7 @@ export type DocumentUploadPresignFile = {
   filename: string;
   size_bytes: number;
   content_type: string;
+  replace_failed?: boolean;
 };
 
 export type PresignedUpload = {
@@ -211,6 +212,7 @@ export type PresignedUpload = {
   headers: Record<string, string>;
   expires_in_seconds: number;
   max_bytes: number;
+  replace_failed?: boolean;
 };
 
 export type CompletedUpload = {
@@ -586,10 +588,11 @@ export function deleteMessage(
   );
 }
 
-export function uploadDocument(token: string, file: File, categorization?: CategorizationInput) {
+export function uploadDocument(token: string, file: File, categorization?: CategorizationInput, replaceFailed = false) {
   const formData = new FormData();
   formData.append("file", file);
   if (categorization) formData.append("categorization", JSON.stringify(categorization));
+  if (replaceFailed) formData.append("replace_failed", "true");
   return apiRequest<CompletedUpload>(
     "/documents/upload",
     {
@@ -600,12 +603,13 @@ export function uploadDocument(token: string, file: File, categorization?: Categ
   );
 }
 
-export function uploadDocuments(token: string, files: File[], categorizations?: Record<string, CategorizationInput>) {
+export function uploadDocuments(token: string, files: File[], categorizations?: Record<string, CategorizationInput>, replaceFailed = false) {
   const formData = new FormData();
   for (const file of files) {
     formData.append("files", file);
   }
   if (categorizations && Object.keys(categorizations).length) formData.append("categorizations", JSON.stringify(categorizations));
+  if (replaceFailed) formData.append("replace_failed", "true");
   return apiRequest<{
     status: "ok";
     files: CompletedUpload[];
@@ -632,7 +636,7 @@ export function presignDocumentUploads(
 
 export function completeDocumentUploads(
   token: string,
-  uploads: Array<Pick<PresignedUpload, "upload_id" | "filename"> & { categorization?: CategorizationInput }>,
+  uploads: Array<Pick<PresignedUpload, "upload_id" | "filename"> & { categorization?: CategorizationInput; replace_failed?: boolean }>,
 ) {
   return apiRequest<{
     status: "ok";

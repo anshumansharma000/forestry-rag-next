@@ -1,5 +1,6 @@
 import type { CompletedUpload, IngestJob, PresignedUpload } from "./api";
 import type { CategorizationInput } from "./document-categorization";
+import { UploadReplacementCancelled } from "./upload-replacement";
 
 export const SUPPORTED_DOCUMENT_EXTENSIONS = [
   "pdf",
@@ -165,6 +166,10 @@ export async function processDocumentUploads(
   try {
     uploads = await presign(items.map(({ file }) => file));
   } catch (error) {
+    if (error instanceof UploadReplacementCancelled) {
+      items.forEach(({ key }) => onUpdate(key, { status: "selected", detail: error.message }));
+      return { cancelled: true };
+    }
     const detail = errorMessage(error, "Unable to prepare direct upload.");
     items.forEach(({ key }) =>
       onUpdate(key, { status: "failed", detail, failureStage: "upload" }),
@@ -178,6 +183,31 @@ export async function processDocumentUploads(
       onUpdate(key, { status: "failed", detail, failureStage: "upload" }),
     );
     return;
+  }
+
+  const recovering = uploads.some(upload => upload.replace_failed);
+  const ready: Array<{ item: UploadFlowFile; completed: CompletedUpload }> = [];
+  let completionTail = Promise.resolve();
+  function finalize(item: UploadFlowFile, upload: PresignedUpload) {
+    const action = () => item.categorization ? complete(upload, item.categorization) : complete(upload);
+    if (!recovering) return action();
+    // Confirmed replacements share the worker's source-write lease. Serialize
+    // finalization and defer jobs until every replacement has finished.
+    const result = completionTail.then(action);
+    completionTail = result.then(() => undefined, () => undefined);
+    return result;
+  }
+  async function queue(item: UploadFlowFile, completed: CompletedUpload) {
+    try {
+      const { filename } = completed;
+      const job = await startIngest(filename);
+      onUpdate(item.key, { status: "queued", completedFilename: filename, job, detail: undefined });
+    } catch (error) {
+      onUpdate(item.key, {
+        status: "failed", completedFilename: completed.filename,
+        detail: errorMessage(error, "Unable to start document ingestion."), failureStage: "ingestion",
+      });
+    }
   }
 
   await runWithConcurrency(
@@ -201,9 +231,7 @@ export async function processDocumentUploads(
       let completed: CompletedUpload;
       try {
         onUpdate(item.key, { status: "finalizing", uploadProgress: 100 });
-        completed = item.categorization
-          ? await complete(upload, item.categorization)
-          : await complete(upload);
+        completed = await finalize(item, upload);
       } catch (error) {
         onUpdate(item.key, {
           status: "failed",
@@ -213,23 +241,14 @@ export async function processDocumentUploads(
         return;
       }
 
-      try {
-        const { filename } = completed;
-        const job = await startIngest(filename);
+      if (recovering) {
+        ready.push({ item, completed });
         onUpdate(item.key, {
-          status: "queued",
-          completedFilename: filename,
-          job,
-          detail: undefined,
-        });
-      } catch (error) {
-        onUpdate(item.key, {
-          status: "failed",
           completedFilename: completed.filename,
-          detail: errorMessage(error, "Unable to start document ingestion."),
-          failureStage: "ingestion",
+          detail: "Uploaded. Waiting for the remaining files before processing.",
         });
-      }
+      } else await queue(item, completed);
     },
   );
+  if (recovering) await runWithConcurrency(ready, 2, ({ item, completed }) => queue(item, completed));
 }

@@ -13,7 +13,6 @@ import {
   Loader2,
   RefreshCw,
   Search,
-  ShieldCheck,
   Upload,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
@@ -49,6 +48,7 @@ import {
   UploadFlowUpdate,
   validateDocumentUploadBatch,
 } from "../../lib/document-upload-flow";
+import { prepareWithReplacementConfirmation } from "../../lib/upload-replacement";
 import {
   IngestJobPoller,
   readActiveJobs,
@@ -145,7 +145,7 @@ function uploadStatusLabel(status: UploadStatus) {
     case "processing":
       return "Processing";
     case "indexed":
-      return "Indexed";
+      return "Ready for chat";
     case "failed":
       return "Failed";
   }
@@ -280,6 +280,7 @@ export default function IngestionPage() {
   const [maxContentChars, setMaxContentChars] = useState(
     DEFAULT_MAX_CONTENT_CHARS,
   );
+  const [dragging, setDragging] = useState(false);
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const [metadataDrafts, setMetadataDrafts] = useState<Record<string, CategorizationDraft>>({});
   const categoryCatalog = useDocumentCategories(auth?.access_token);
@@ -659,22 +660,22 @@ export default function IngestionPage() {
         categorization: uploadCategorization(metadataDrafts[fileKey(file, index)] ?? categorizationDraft()),
       }));
       let hasFailures = false;
-      await processDocumentUploads(items, {
-        presign: async (files) =>
-          (
-            await presignDocumentUploads(
-              token,
-              files.map((file) => ({
-                filename: file.name,
-                size_bytes: file.size,
-                content_type: file.type || "application/octet-stream",
-              })),
-            )
-          ).uploads,
+      const outcome = await processDocumentUploads(items, {
+        presign: async (files) => prepareWithReplacementConfirmation(
+          files.length,
+          async replaceIndices => (await presignDocumentUploads(token, files.map((file, index) => ({
+            filename: file.name,
+            size_bytes: file.size,
+            content_type: file.type || "application/octet-stream",
+            ...(replaceIndices.includes(index) ? { replace_failed: true } : {}),
+          })))).uploads,
+          message => window.confirm(message),
+        ),
         put: putFileToStorage,
         complete: async (upload, categorization) => {
           const response = await completeDocumentUploads(token, [
-            { upload_id: upload.upload_id, filename: upload.filename, ...(categorization ? { categorization } : {}) },
+            { upload_id: upload.upload_id, filename: upload.filename,
+              ...(categorization ? { categorization } : {}), ...(upload.replace_failed ? { replace_failed: true } : {}) },
           ]);
           const completed = response.files[0];
           if (!completed) throw new Error("The upload service did not finalize this file.");
@@ -710,6 +711,10 @@ export default function IngestionPage() {
         errorMessage: formatApiError,
       });
 
+      if (outcome?.cancelled) {
+        setNotice("Re-upload cancelled. Existing files were kept.");
+        return;
+      }
       if (!hasFailures) setNotice("Your documents were uploaded and are now being prepared for search. Review their metadata in Documents when processing finishes.");
       setSelectedFiles([]);
       if (fileInputRef.current) {
@@ -809,23 +814,9 @@ export default function IngestionPage() {
 
   return (
     <SidebarPageShell activePath="/ingestion" user={user}>
-    <main className="min-h-screen bg-surface px-5 py-6 text-on-surface sm:px-8">
+    <main className="document-workspace min-h-[calc(100vh-72px)] bg-surface px-5 py-6 text-on-surface sm:px-8">
       <div className="mx-auto max-w-6xl">
-        <header className="flex flex-col justify-between gap-4 border-b border-outline-variant pb-6 sm:flex-row sm:items-end">
-          <div>
-            <h1 className="text-[30px] font-bold leading-9 text-primary">
-              Upload documents
-            </h1>
-            <p className="mt-2 text-[14px] text-[#626b79]">
-              Upload department sources, track automatic processing, and inspect
-              the searchable excerpts available to the assistant.
-            </p>
-          </div>
-          <div className="inline-flex w-fit items-center gap-2 rounded border border-[#b7d6c4] bg-[#edf8f1] px-3 py-2 text-[13px] font-semibold text-primary">
-            <ShieldCheck className="h-4 w-4" />
-            {user?.email ?? "Loading"}
-          </div>
-        </header>
+        <p className="text-sm leading-6 text-[#626b79]">Upload department sources and follow their progress until they’re ready for chat.</p>
 
         {error ? <Banner tone="error" message={error} /> : null}
         {notice ? <Banner tone="success" message={notice} /> : null}
@@ -834,7 +825,7 @@ export default function IngestionPage() {
         </p> : null}
 
         {loading ? (
-          <div className="mt-6 flex items-center gap-3 rounded border border-outline-variant bg-white px-4 py-4 shadow-tonal">
+          <div className="mt-6 flex items-center gap-3 rounded border border-outline-variant bg-white px-4 py-4 shadow-sm">
             <Loader2 className="h-5 w-5 animate-spin text-primary" />
             <span className="text-[15px] font-semibold">
               Loading document processing
@@ -848,8 +839,8 @@ export default function IngestionPage() {
             </p>
           </section>
         ) : (
-          <section className="mt-6 grid gap-5 lg:grid-cols-[0.8fr_1.2fr]">
-            <div className="rounded border border-outline-variant bg-white p-5 shadow-tonal">
+          <section className="mt-6 grid gap-6">
+            <div className="rounded-2xl border border-outline-variant/60 bg-white p-5 shadow-sm">
               <div className="flex items-center gap-3">
                 <span className="grid h-11 w-11 place-items-center rounded bg-[#edf8f1] text-primary">
                   <Upload className="h-5 w-5" />
@@ -862,65 +853,15 @@ export default function IngestionPage() {
                 </div>
               </div>
 
-              <div
-                aria-live="polite"
-                className="mt-5 rounded border border-outline-variant bg-surface-container-lowest p-3"
-              >
-                <div className="flex items-center justify-between gap-3">
-                  <p className="inline-flex items-center gap-2 text-[13px] font-bold text-[#26384d]">
-                    <Bell className="h-4 w-4 text-primary" />
-                    Processing updates
-                  </p>
-                  <span className="rounded-full bg-[#e5eee9] px-2 py-0.5 text-[11px] font-semibold text-primary">
-                    {activeJobCount
-                      ? `${activeJobCount} active`
-                      : "No documents processing"}
-                  </span>
-                </div>
-                {activityUpdates.length ? (
-                  <ul className="mt-2 space-y-2">
-                    {activityUpdates.map((update) => (
-                      <li className="flex items-start gap-2" key={update.id}>
-                        {update.tone === "error" ? (
-                          <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-[#a34f35]" />
-                        ) : update.tone === "success" ? (
-                          <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
-                        ) : (
-                          <Clock3 className="mt-0.5 h-4 w-4 shrink-0 text-[#626b79]" />
-                        )}
-                        <span className="min-w-0 text-[12px] leading-4 text-[#4e5966]">
-                          <span className="block break-words">{update.message}</span>
-                          <time className="text-[11px] text-[#7b8492]">
-                            {new Date(update.createdAt).toLocaleTimeString([], {
-                              hour: "2-digit",
-                              minute: "2-digit",
-                            })}
-                          </time>
-                        </span>
-                      </li>
-                    ))}
-                  </ul>
-                ) : (
-                  <p className="mt-2 text-[12px] leading-4 text-[#626b79]">
-                    Upload a document to follow its progress and see any issues
-                    here.
-                  </p>
-                )}
-              </div>
+
 
               <div className="mt-5 grid gap-3">
-                <button
-                  className="inline-flex h-11 items-center justify-center gap-2 rounded border border-outline-variant bg-white px-4 text-[14px] font-semibold text-[#26384d] transition hover:bg-surface-container-low disabled:cursor-not-allowed disabled:opacity-60"
-                  disabled={uploading}
-                  onClick={() => fileInputRef.current?.click()}
-                  type="button"
-                >
-                  <Upload className="h-4 w-4" />
-                  Choose documents
-                </button>
-                <p className="text-[12px] leading-4 text-[#626b79]">
-                  PDF, TXT, DOCX, PPT, and PPTX. {DOCUMENT_UPLOAD_LIMIT_COPY}
-                </p>
+                <div onDragOver={event => { event.preventDefault(); if (!uploading) setDragging(true); }} onDragLeave={() => setDragging(false)} onDrop={event => { event.preventDefault(); setDragging(false); if (!uploading) selectFiles(event.dataTransfer.files); }} className={`rounded-2xl border-2 border-dashed p-8 text-center transition ${dragging ? "border-primary bg-[#edf8f1]" : "border-[#cbd8cf] bg-[#f8fbf9]"}`}>
+                  <Upload className="mx-auto h-8 w-8 text-primary" />
+                  <p className="mt-3 text-base font-semibold text-[#263c2e]">Drop your documents here</p>
+                  <button className="secondary-button mt-3" disabled={uploading} onClick={() => fileInputRef.current?.click()} type="button">Choose documents</button>
+                  <p className="mt-3 text-xs leading-5 text-[#626b79]">PDF, TXT, DOCX, PPT, and PPTX. {DOCUMENT_UPLOAD_LIMIT_COPY}</p>
+                </div>
                 {categoryCatalog.status === "loading" ? <p className="text-xs text-[#626b79]" role="status">Loading document categories…</p> : null}
                 {categoryCatalog.status === "unavailable" ? <div className="rounded bg-[#fff9e9] p-3 text-xs leading-5 text-[#6c551d]" role="status">
                   Categories are temporarily unavailable. You can still upload without metadata.
@@ -944,8 +885,16 @@ export default function IngestionPage() {
                 {uploadRows.length ? (
                   <div className="rounded border border-outline-variant bg-surface-container-lowest px-3 py-2">
                     <p className="text-[12px] font-semibold uppercase text-[#7b8492]">
-                      Files
+                      Upload queue · {uploadRows.length} files
                     </p>
+                    <div className="mt-3 flex flex-wrap gap-2 text-xs" aria-label="Queue status">
+                      {[
+                        ["Uploading", uploadRows.filter(file => ["requesting_upload", "uploading", "finalizing"].includes(file.status)).length],
+                        ["Processing", uploadRows.filter(file => ["queued", "processing"].includes(file.status)).length],
+                        ["Ready", uploadRows.filter(file => file.status === "indexed").length],
+                        ["Needs attention", uploadRows.filter(file => file.status === "failed").length],
+                      ].map(([label, count]) => <span key={label} className={`rounded-full px-2.5 py-1 ${label === "Needs attention" && count ? "bg-[#fff3ef] text-[#743f2c]" : "bg-[#edf4ef] text-primary"}`}>{label} · {count}</span>)}
+                    </div>
                     <ul className="mt-2 space-y-1 text-[13px] leading-5 text-[#323b45]">
                       {uploadRows.map((file) => (
                         <li
@@ -982,7 +931,7 @@ export default function IngestionPage() {
                             {categoryLabel(metadataDrafts[file.key].document_type, categoryCatalog.categories)}
                           </p> : null}
                           {file.status === "indexed" ? <Link className="mt-2 inline-flex min-h-11 items-center text-xs font-bold text-primary underline"
-                            href={`/documents?search=${encodeURIComponent(file.completedFilename ?? file.filename)}`}>Review document metadata</Link> : null}
+                            href={`/documents?search=${encodeURIComponent(file.completedFilename ?? file.filename)}`}>View in Documents</Link> : null}
                           {file.status === "uploading" ? (
                             <div className="mt-2 flex items-center gap-2">
                               <div
@@ -1121,6 +1070,52 @@ export default function IngestionPage() {
                 </button>
               </div>
 
+              <details className="mt-5 rounded-xl border border-outline-variant/60 p-4">
+                <summary className="cursor-pointer text-sm font-medium text-[#626b79]">Activity log{activeJobCount ? ` · ${activeJobCount} active` : ""}</summary>
+                <div aria-live="polite" className="mt-3">
+                <div className="flex items-center justify-between gap-3">
+                  <p className="inline-flex items-center gap-2 text-[13px] font-bold text-[#26384d]">
+                    <Bell className="h-4 w-4 text-primary" />
+                    Processing updates
+                  </p>
+                  <span className="rounded-full bg-[#e5eee9] px-2 py-0.5 text-[11px] font-semibold text-primary">
+                    {activeJobCount
+                      ? `${activeJobCount} active`
+                      : "No documents processing"}
+                  </span>
+                </div>
+                {activityUpdates.length ? (
+                  <ul className="mt-2 space-y-2">
+                    {activityUpdates.map((update) => (
+                      <li className="flex items-start gap-2" key={update.id}>
+                        {update.tone === "error" ? (
+                          <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-[#a34f35]" />
+                        ) : update.tone === "success" ? (
+                          <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
+                        ) : (
+                          <Clock3 className="mt-0.5 h-4 w-4 shrink-0 text-[#626b79]" />
+                        )}
+                        <span className="min-w-0 text-[12px] leading-4 text-[#4e5966]">
+                          <span className="block break-words">{update.message}</span>
+                          <time className="text-[11px] text-[#7b8492]">
+                            {new Date(update.createdAt).toLocaleTimeString([], {
+                              hour: "2-digit",
+                              minute: "2-digit",
+                            })}
+                          </time>
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="mt-2 text-[12px] leading-4 text-[#626b79]">
+                    Upload a document to follow its progress and see any issues
+                    here.
+                  </p>
+                )}
+                </div>
+              </details>
+
               {preview ? (
               <div className="mt-5 grid gap-3 text-[13px] leading-5 text-[#4e5966] sm:grid-cols-2">
                 <Metric label="Documents" value={preview.documents} />
@@ -1141,7 +1136,8 @@ export default function IngestionPage() {
 
             </div>
 
-            <section className="rounded border border-outline-variant bg-white p-5 shadow-tonal">
+            <details className="rounded-xl border border-outline-variant/70 bg-white p-5">
+              <summary className="cursor-pointer text-base font-semibold text-primary">Inspect searchable excerpts</summary>
               <div className="flex items-center gap-3">
                 <span className="grid h-11 w-11 place-items-center rounded bg-[#edf8f1] text-primary">
                   <Search className="h-5 w-5" />
@@ -1163,7 +1159,7 @@ export default function IngestionPage() {
                 <label className="grid gap-1 text-[13px] font-semibold text-[#26384d]">
                   Source filename
                   <input
-                    className="h-10 rounded border border-outline-variant bg-white px-3 text-[14px] font-normal text-[#151a18] outline-none transition focus:border-primary"
+                    className="h-10 rounded-lg border border-outline-variant/70 bg-white px-3 text-[14px] font-normal text-[#151a18] outline-none transition focus:border-primary"
                     disabled={allSources}
                     onChange={(event) => handleSourceChange(event.target.value)}
                     placeholder="Exact filename"
@@ -1215,7 +1211,7 @@ export default function IngestionPage() {
                     <label className="grid gap-1 text-[13px] font-semibold text-[#26384d] sm:w-44">
                       Max chars
                       <input
-                        className="h-10 rounded border border-outline-variant bg-white px-3 text-[14px] font-normal text-[#151a18] outline-none transition focus:border-primary"
+                        className="h-10 rounded-lg border border-outline-variant/70 bg-white px-3 text-[14px] font-normal text-[#151a18] outline-none transition focus:border-primary"
                         max={MAX_CONTENT_CHARS}
                         min={1}
                         onChange={(event) =>
@@ -1259,7 +1255,7 @@ export default function IngestionPage() {
                 </div>
                 <div className="inline-flex items-center gap-2">
                   <button
-                    className="inline-flex h-9 items-center justify-center gap-1 rounded border border-outline-variant bg-white px-3 text-[13px] font-semibold text-[#26384d] transition hover:bg-surface-container-low disabled:cursor-not-allowed disabled:opacity-50"
+                    className="inline-flex h-9 items-center justify-center gap-1 rounded-lg border border-outline-variant/70 bg-white px-3 text-[13px] font-semibold text-[#26384d] transition hover:bg-surface-container-low disabled:cursor-not-allowed disabled:opacity-50"
                     disabled={!canGoBack}
                     onClick={() =>
                       void goToPreviewPage(
@@ -1273,7 +1269,7 @@ export default function IngestionPage() {
                     Previous
                   </button>
                   <button
-                    className="inline-flex h-9 items-center justify-center gap-1 rounded border border-outline-variant bg-white px-3 text-[13px] font-semibold text-[#26384d] transition hover:bg-surface-container-low disabled:cursor-not-allowed disabled:opacity-50"
+                    className="inline-flex h-9 items-center justify-center gap-1 rounded-lg border border-outline-variant/70 bg-white px-3 text-[13px] font-semibold text-[#26384d] transition hover:bg-surface-container-low disabled:cursor-not-allowed disabled:opacity-50"
                     disabled={!canGoForward}
                     onClick={() =>
                       void goToPreviewPage(
@@ -1350,7 +1346,7 @@ export default function IngestionPage() {
                         Content hidden
                       </div>
                     ) : (
-                      <div className="mt-3 rounded border border-outline-variant bg-white px-3 py-2">
+                      <div className="mt-3 rounded-lg border border-outline-variant/70 bg-white px-3 py-2">
                         <p className="whitespace-pre-wrap text-[14px] leading-6 text-[#323b45]">
                           {chunk.content || "No content returned."}
                         </p>
@@ -1365,7 +1361,7 @@ export default function IngestionPage() {
                   </article>
                 ))}
               </div>
-            </section>
+            </details>
           </section>
         )}
 

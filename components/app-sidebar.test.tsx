@@ -13,6 +13,13 @@ const admin: AuthUser = {
 };
 
 describe("AppSidebar", () => {
+  it("keeps home, new chat, and chat navigation in the app workspace", () => {
+    const markup = renderToStaticMarkup(<AppSidebar activePath="/app" user={admin} />);
+    expect(markup.match(/href="\/app"/g)).toHaveLength(3);
+    expect(markup).not.toContain('href="/"');
+    expect(markup).toMatch(/aria-current="page"[^>]*href="\/app"/);
+  });
+
   it("shows the complete admin navigation and marks the current page", () => {
     const markup = renderToStaticMarkup(
       <AppSidebar activePath="/documents" user={admin} />,
@@ -42,6 +49,7 @@ describe("AppSidebar", () => {
 
 describe("shared sidebar page header", () => {
   it.each([
+    ["/app", "Chat"],
     ["/documents", "Documents"],
     ["/ingestion", "Document processing"],
     ["/admin/rag-lab", "Knowledge Lab"],

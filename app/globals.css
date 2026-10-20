@@ -56,6 +56,11 @@ a:focus-visible {
   border-radius: var(--document-radius);
 }
 
+/* Sign-in uses the same 12px rectangular corners, including the password toggle. */
+.login-workspace :is(.rounded, .rounded-lg, .rounded-xl, .field, .primary-button, .secondary-button) {
+  border-radius: 12px;
+}
+
 @layer components {
   .field {
     @apply min-h-11 w-full rounded-lg border border-outline-variant/70 bg-white px-3 py-2 text-[15px] text-on-surface disabled:cursor-not-allowed disabled:opacity-60;

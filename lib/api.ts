@@ -1,5 +1,6 @@
 "use client";
 
+import { normalizeAnswerData, normalizeAssistantMessage, type AnswerProvenance } from "./answer-provenance";
 import type { CategorizationInput, DocumentCategorization, DocumentCategory } from "./document-categorization";
 
 export const API_BASE_URL =
@@ -50,7 +51,10 @@ export type AnswerOutcome =
   | "answered"
   | "insufficient_evidence"
   | "unsupported_answer"
-  | "not_generated";
+  | "not_generated"
+  | "out_of_scope"
+  | "clarification_required"
+  | "conversational";
 
 export type Source = {
   /** Stable number printed in the answer's inline citation markers. */
@@ -68,7 +72,7 @@ export type Source = {
   text: string;
 };
 
-export type AskResponse = {
+export type AskResponse = AnswerProvenance & {
   answer: string;
   sources: Source[];
   /** Sources actually cited by this answer, normalized at the API boundary. */
@@ -489,11 +493,12 @@ export function createSession(token: string, title?: string | null) {
   });
 }
 
-export function getMessages(token: string, sessionId: string) {
-  return apiRequest<{ session_id: string; messages: ChatMessage[] }>(
+export async function getMessages(token: string, sessionId: string) {
+  const response = await apiRequest<{ session_id: string; messages: ChatMessage[] }>(
     `/chat/sessions/${encodeURIComponent(sessionId)}/messages`,
     { token },
   );
+  return { ...response, messages: response.messages.map(normalizeAssistantMessage) };
 }
 
 export async function downloadSourceDocument(
@@ -519,12 +524,14 @@ type LegacyAskResponse = Omit<AskResponse, "cited_sources"> & {
   cited_sources?: Source[];
 };
 
-function normalizeAskResponse<T extends LegacyAskResponse>(response: T): T & AskResponse {
+function normalizeAskResponse<T extends LegacyAskResponse>(response: T, metadata: Record<string, unknown> = {}): T & AskResponse {
+  const data = normalizeAnswerData(response, metadata);
   return {
     ...response,
-    cited_sources: Array.isArray(response.cited_sources)
-      ? response.cited_sources
-      : [],
+    ...data,
+    outcome: data.outcome ?? response.outcome,
+    abstained: data.abstained ?? response.abstained,
+    cited_sources: data.cited_sources ?? [],
   };
 }
 
@@ -567,7 +574,31 @@ export async function askSession(
       request_id: requestId,
     }),
   });
-  return normalizeAskResponse(response);
+  // Top-level fields are authoritative when supplied; metadata supports rolling deployments.
+  const normalized = normalizeAskResponse(response, {
+    ...response.assistant_message.metadata,
+    answer: response.assistant_message.content,
+    sources: response.assistant_message.sources,
+  });
+  return {
+    ...normalized,
+    assistant_message: normalizeAssistantMessage({
+      ...response.assistant_message,
+      content: normalized.answer,
+      sources: normalized.sources,
+      metadata: {
+        ...response.assistant_message.metadata,
+        answer_origin: normalized.answer_origin,
+        web_sources: normalized.web_sources,
+        web_search_entry_point: normalized.web_search_entry_point,
+        request_id: response.request_id,
+        outcome: normalized.outcome,
+        abstained: normalized.abstained,
+        retrieval_confidence: normalized.confidence,
+        cited_sources: normalized.cited_sources,
+      },
+    }),
+  };
 }
 
 export function deleteSession(token: string, sessionId: string) {

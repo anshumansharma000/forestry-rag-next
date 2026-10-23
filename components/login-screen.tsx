@@ -39,7 +39,7 @@ export function LoginScreen({
               Aranyabodh AI
             </p>
             <p className="mt-0.5 text-xs text-[#738078]">
-              Forest diversion knowledge assistant
+              Knowledge Assistant on Forest Land Diversion for Non-Forest Use
             </p>
           </div>
         </a>
@@ -57,13 +57,14 @@ export function LoginScreen({
             id="login-intro"
             className="mt-5 text-[42px] font-semibold leading-[1.14] tracking-tight text-primary"
           >
-            Department knowledge,
+            Ministry, Department Knowledge,
             <br />
             within reach.
           </h2>
           <p className="mt-5 max-w-sm text-[16px] leading-7 text-[#607368]">
-            Find guidance in your department’s documents, then open the sources
-            behind each answer.
+            Find Guidance from Policies, Acts, Rules, Notifications, Procedures,
+            Guidelines, Court Matters, and more; Refer to sources behind each
+            answer.
           </p>
           <div className="mt-9 space-y-5 border-t border-[#d8e4db] pt-7">
             <div className="flex items-start gap-3">
@@ -74,9 +75,6 @@ export function LoginScreen({
                 <p className="text-sm font-semibold text-[#2a4835]">
                   Ask in plain language
                 </p>
-                <p className="mt-1 text-[13px] leading-5 text-[#6a7e71]">
-                  Explore rules, procedures, and department records.
-                </p>
               </div>
             </div>
             <div className="flex items-start gap-3">
@@ -86,9 +84,6 @@ export function LoginScreen({
               <div>
                 <p className="text-sm font-semibold text-[#2a4835]">
                   Follow the evidence
-                </p>
-                <p className="mt-1 text-[13px] leading-5 text-[#6a7e71]">
-                  Review the supporting documents alongside answers.
                 </p>
               </div>
             </div>
@@ -125,7 +120,7 @@ export function LoginScreen({
               id="login-description"
               className="mt-2 text-sm leading-6 text-[#738078]"
             >
-              Sign in with your department account.
+              Sign in with your account.
             </p>
             {error ? (
               <div
@@ -188,9 +183,9 @@ export function LoginScreen({
             </p>
             <div className="mt-6 border-t border-[#edf0ed] pt-5">
               <p className="text-center text-xs leading-5 text-[#7d8981]">
-                Need access or a password reset?
+                {/* Need access or a password reset? */}
                 <br />
-                Contact your department administrator.
+                {/* Contact your department administrator. */}
               </p>
             </div>
           </form>

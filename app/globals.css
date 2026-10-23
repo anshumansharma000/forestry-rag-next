@@ -75,3 +75,35 @@ a:focus-visible {
     @apply inline-flex min-h-11 max-w-full items-center gap-2 rounded-full bg-[#edf4ef] px-3 py-1.5 text-xs font-medium text-primary transition hover:bg-[#e0ece4];
   }
 }
+
+@keyframes answer-word-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes answer-wait-pulse {
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 1; }
+}
+
+.answer-reveal-word,
+.answer-reveal-block {
+  animation: answer-word-in 140ms ease-out both;
+}
+
+.answer-wait-pulse {
+  animation: answer-wait-pulse 1.5s ease-in-out infinite;
+}
+
+.answer-controls-in {
+  animation: answer-word-in 180ms ease-out both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .answer-reveal-word,
+  .answer-reveal-block,
+  .answer-wait-pulse,
+  .answer-controls-in {
+    animation: none;
+  }
+}

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ask, askSession } from "./api";
+import { ask, askSession, getMessages } from "./api";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -18,7 +18,7 @@ const source = {
 };
 
 describe("adaptive RAG API contract", () => {
-  it.each(["answered", "insufficient_evidence", "unsupported_answer", "not_generated"] as const)(
+  it.each(["answered", "insufficient_evidence", "unsupported_answer", "not_generated", "out_of_scope", "clarification_required", "conversational"] as const)(
     "preserves the authoritative %s outcome",
     async (outcome) => {
       vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({
@@ -108,5 +108,99 @@ describe("adaptive RAG API contract", () => {
     vi.stubGlobal("fetch", fetchMock);
     await expect(ask("token", "Question?", 21)).rejects.toThrow("1 through 20");
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+
+describe("internet fallback API and history", () => {
+  const web = {
+    answer_origin: "web", web_sources: [{ citation_number: 3, title: "Web article", url: "https://example.com/article" }],
+    web_search_entry_point: "<style>.chip{color:green}</style><a href='https://google.com/search?q=forest'>Forest</a>",
+  };
+  const assistant = { id: "a", session_id: "s", role: "assistant", content: "Web answer [Web 3](https://example.com/article)", sources: [source], metadata: { request_id: "r" }, created_at: "now" };
+  const response = { answer: assistant.content, sources: [source], cited_sources: [], confidence: .9, outcome: "answered", abstained: false };
+  const mock = (value: unknown) => vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify(value), { status: 200 })));
+
+  it("normalizes standalone web answers without changing outcome or retrieval data", async () => {
+    mock({ ...response, ...web, cited_sources: [source] });
+    const result = await ask("token", "Question?");
+    expect(result).toMatchObject({ ...web, outcome: "answered", abstained: false, cited_sources: [], sources: [source], confidence: .9 });
+  });
+
+  it("copies top-level web fields into live assistant metadata and preserves request identity", async () => {
+    mock({ ...response, ...web, request_id: "r", session_id: "s", search_query: "Question?", user_message: { ...assistant, role: "user" }, assistant_message: assistant });
+    const result = await askSession("token", "s", "Question?", "r");
+    expect(result.assistant_message.metadata).toMatchObject({ ...web, request_id: "r", outcome: "answered", abstained: false, cited_sources: [] });
+  });
+
+  it("normalizes reloaded web metadata identically to a new reply", async () => {
+    mock({ ...response, ...web, request_id: "r", assistant_message: assistant, user_message: { ...assistant, role: "user" } });
+    const live = await askSession("token", "s", "Question?", "r");
+    mock({ session_id: "s", messages: [{ ...assistant, metadata: { ...web, request_id: "r", outcome: "answered", abstained: false, cited_sources: [], retrieval_confidence: .9 } }] });
+    const history = await getMessages("token", "s");
+    expect(history.messages[0]).toEqual(live.assistant_message);
+  });
+
+  it("accepts metadata-only provenance during a rolling deployment", async () => {
+    mock({ ...response, request_id: "r", assistant_message: { ...assistant, metadata: web } });
+    const result = await askSession("token", "s", "Question?", "r");
+    expect(result).toMatchObject(web);
+    expect(result.assistant_message.metadata).toMatchObject(web);
+  });
+
+  it("normalizes legacy history as documents and retains its existing metadata and sources", async () => {
+    mock({ session_id: "s", messages: [assistant, { ...assistant, id: "u", role: "user" }] });
+    const result = await getMessages("token", "s");
+    expect(result.messages[0].metadata).toEqual({ request_id: "r", answer_origin: "documents", web_sources: [], web_search_entry_point: null });
+    expect(result.messages[0].sources).toEqual([source]);
+    expect(result.messages[1].metadata).toEqual({ request_id: "r" });
+  });
+
+  it("does not allow stale web metadata to override explicit document provenance", async () => {
+    mock({ ...response, answer_origin: "documents", cited_sources: [source], request_id: "r", assistant_message: { ...assistant, metadata: web } });
+    const result = await askSession("token", "s", "Question?", "r");
+    expect(result.answer_origin).toBe("documents");
+    expect(result.cited_sources).toEqual([source]);
+    expect(result.assistant_message.metadata.web_sources).toEqual([]);
+  });
+  it("uses metadata-only outcome, abstention and retrieval confidence for new replies", async () => {
+    mock({ request_id: "r", assistant_message: { ...assistant, metadata: { ...web, outcome: "answered", abstained: false, retrieval_confidence: 0 } } });
+    const result = await askSession("token", "s", "Question?", "r");
+    expect(result).toMatchObject({ answer: assistant.content, outcome: "answered", abstained: false, confidence: 0 });
+    expect(result.assistant_message.metadata).toMatchObject({ outcome: "answered", abstained: false, retrieval_confidence: 0 });
+  });
+
+  it("prefers explicit top-level answer, false, zero and empty sources over stale metadata", async () => {
+    mock({ ...response, answer: "Fresh answer", abstained: false, confidence: 0, sources: [], cited_sources: [], assistant_message: { ...assistant, metadata: { outcome: "insufficient_evidence", abstained: true, retrieval_confidence: .9, cited_sources: [source] } } });
+    const result = await askSession("token", "s", "Question?", "r");
+    expect(result.assistant_message).toMatchObject({ content: "Fresh answer", sources: [], metadata: { outcome: "answered", abstained: false, retrieval_confidence: 0, cited_sources: [] } });
+  });
+
+  it.each(["out_of_scope", "clarification_required"] as const)("reloads %s from metadata and removes supporting citations", async outcome => {
+    mock({ session_id: "s", messages: [{ ...assistant, metadata: { outcome, abstained: true, retrieval_confidence: 0, cited_sources: [source] } }] });
+    const result = await getMessages("token", "s");
+    expect(result.messages[0].metadata).toMatchObject({ outcome, abstained: true, retrieval_confidence: 0, cited_sources: [] });
+  });
+
+});
+
+
+describe("conversational chat contract", () => {
+  it.each([
+    ["Hello", "Hello! How can I help?"],
+    ["Thanks", "You’re welcome!"],
+  ])("preserves %s replies in incoming responses and saved metadata", async (prompt, answer) => {
+    const metadata = { outcome: "conversational", answer_origin: "conversational", abstained: false, retrieval_confidence: null, cited_sources: [], web_sources: [], web_search_entry_point: null, request_id: "r" };
+    const assistant = { id: "a", session_id: "s", role: "assistant", content: answer, sources: [], metadata, created_at: "now" };
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ answer, outcome: "conversational", answer_origin: "conversational", abstained: false, confidence: null, sources: [], cited_sources: [], request_id: "r", assistant_message: assistant }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ session_id: "s", messages: [assistant] }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const live = await askSession("token", "s", prompt, "r");
+    const history = await getMessages("token", "s");
+    expect(live).toMatchObject({ answer, outcome: "conversational", answer_origin: "conversational", abstained: false, confidence: null, sources: [], cited_sources: [] });
+    expect(live.assistant_message).toEqual(history.messages[0]);
+    expect(history.messages[0].metadata).toEqual(metadata);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 });

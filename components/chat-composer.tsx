@@ -69,7 +69,7 @@ export function ChatComposer({ value, onChange, onSend, disabled, sending, input
           </button>
         </form>
         <p id="chat-input-hint" className="mt-2 text-center text-[11px] leading-4 text-[#7d8780]">
-          {sending ? "Searching your documents…" : disabled ? "Retry or discard the saved message to continue." : "Enter to send · Shift + Enter for a new line"}
+          {sending ? "Preparing and checking your answer…" : disabled ? "Retry or discard the saved message to continue." : "Enter to send · Shift + Enter for a new line"}
         </p>
       </div>
     </div>

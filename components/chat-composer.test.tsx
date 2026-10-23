@@ -23,10 +23,10 @@ describe("chat composer availability", () => {
   it("distinguishes a saved unresolved message from an active search", () => {
     const blocked = renderComposer("Saved question", true);
     expect(blocked).toContain("Retry or discard the saved message to continue.");
-    expect(blocked).not.toContain("Searching your documents");
+    expect(blocked).not.toContain("Preparing and checking your answer");
     expect(blocked).toMatch(/<textarea[^>]*disabled=""/);
     const busy = renderComposer("Saved question", true, true);
     expect(busy).toContain('aria-label="Sending prompt"');
-    expect(busy).toContain("Searching your documents");
+    expect(busy).toContain("Preparing and checking your answer");
   });
 });

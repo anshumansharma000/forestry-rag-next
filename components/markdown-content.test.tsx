@@ -24,9 +24,9 @@ function source(citationNumber: number, name = `Document ${citationNumber}.pdf`)
   };
 }
 
-function render(content: string, sources: Source[] = []) {
+function render(content: string, sources: Source[] = [], revealing = false) {
   return renderToStaticMarkup(
-    <MarkdownContent content={content} onSelectSource={vi.fn()} sources={sources} />,
+    <MarkdownContent content={content} onSelectSource={vi.fn()} sources={sources} revealing={revealing} />,
   );
 }
 
@@ -103,5 +103,29 @@ describe("answer citations", () => {
     expect(sourcesForAskResponse({ answer: "Answer [2].", sources: allSources, cited_sources: citedSources })).toBe(citedSources);
     expect(sourcesForAskResponse({ answer: "Answer [2].", sources: allSources, cited_sources: [] })).toEqual([]);
     expect(sourcesForAskResponse({ answer: "No citations.", sources: allSources, cited_sources: [] })).toEqual([]);
+  });
+});
+
+
+describe("verified answer reveal", () => {
+  it("keeps complete Markdown structure and citation targets during the reveal", () => {
+    const content = "# Forestry guidance\n\nA **verified answer** [1].\n\n- First step\n- Second step\n\n| Rule | Value |\n| --- | --- |\n| Oak | 2 |\n\n```text\n  preserve  spacing\n```";
+    const markup = render(content, [source(1)], true);
+    expect(markup).toContain('<h1 class="answer-reveal-block"');
+    expect(markup).toContain("<strong>");
+    expect(markup).toContain("<table>");
+    expect(markup).toContain("<ul>");
+    expect(markup).toContain('Open source 1: Document 1.pdf');
+    expect(markup).toContain('aria-hidden="true"');
+    expect(markup.match(/data-answer-reveal-last="true"/g)).toHaveLength(1);
+    expect(markup).toContain('animation-delay:0ms');
+    expect(markup).not.toContain("Show full answer");
+  });
+
+  it("renders history immediately without animation or hidden content", () => {
+    const markup = render("An existing answer.");
+    expect(markup).not.toContain("answer-reveal-word");
+    expect(markup).not.toContain('aria-hidden="true"');
+    expect(markup).toContain("<p>An existing answer.</p>");
   });
 });

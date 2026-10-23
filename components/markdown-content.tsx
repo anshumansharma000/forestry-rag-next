@@ -3,6 +3,8 @@
 import React from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { rehypeAnswerReveal } from "../lib/answer-reveal";
+import { safeHttpsUrl } from "../lib/answer-provenance";
 import type { AskResponse, Source } from "../lib/api";
 
 type MarkdownNode = {
@@ -54,9 +56,9 @@ export function citedSourcesForMessage(content: string, sources: Source[]) {
 }
 
 export function sourcesForAskResponse(
-  response: Pick<AskResponse, "answer" | "cited_sources" | "sources">,
+  response: Pick<AskResponse, "answer" | "cited_sources" | "sources" | "answer_origin">,
 ) {
-  return response.cited_sources;
+  return response.answer_origin === "web" ? [] : response.cited_sources;
 }
 
 function remarkCitations({ sources }: { sources: Source[] }) {
@@ -122,7 +124,13 @@ export function MarkdownContent({
   content,
   onSelectSource,
   sources,
+  revealing = false,
+  httpsLinksOnly = false,
+  onRevealComplete,
 }: {
+  httpsLinksOnly?: boolean;
+  revealing?: boolean;
+  onRevealComplete?: () => void;
   content: string;
   onSelectSource: (source: Source) => void;
   sources: Source[];
@@ -132,19 +140,30 @@ export function MarkdownContent({
   );
 
   return (
-    <div className="space-y-4 break-words [&_blockquote]:border-l-4 [&_blockquote]:border-primary/35 [&_blockquote]:pl-4 [&_blockquote]:italic [&_blockquote]:text-[#4e5966] [&_code]:rounded [&_code]:bg-surface-container-low [&_code]:px-1.5 [&_code]:py-0.5 [&_code]:text-[0.9em] [&_h1]:mt-6 [&_h1]:text-2xl [&_h1]:font-bold [&_h1]:leading-tight [&_h1]:text-primary [&_h2]:mt-5 [&_h2]:text-xl [&_h2]:font-bold [&_h2]:leading-tight [&_h2]:text-primary [&_h3]:mt-4 [&_h3]:text-lg [&_h3]:font-bold [&_h3]:text-primary [&_h4]:font-bold [&_h4]:text-primary [&_li]:pl-1 [&_ol]:ml-6 [&_ol]:list-decimal [&_ol]:space-y-1.5 [&_p]:leading-7 [&_pre]:overflow-x-auto [&_pre]:rounded [&_pre]:border [&_pre]:border-outline-variant [&_pre]:bg-surface-container-lowest [&_pre]:p-3 [&_pre]:text-[14px] [&_pre_code]:bg-transparent [&_pre_code]:p-0 [&_table]:min-w-full [&_table]:border-collapse [&_table]:text-left [&_table]:text-[14px] [&_td]:border-b [&_td]:border-outline-variant/70 [&_td]:px-3 [&_td]:py-2 [&_th]:border-b [&_th]:border-outline-variant [&_th]:bg-surface-container-low [&_th]:px-3 [&_th]:py-2 [&_th]:font-bold [&_ul]:ml-6 [&_ul]:list-disc [&_ul]:space-y-1.5 [&_ul_ul]:list-[circle]">
+    <div
+      aria-hidden={revealing || undefined}
+      ref={(node) => {
+        if (revealing) node?.setAttribute("inert", "");
+        else node?.removeAttribute("inert");
+      }}
+      onAnimationEnd={(event) => {
+        if (event.animationName === "answer-word-in" && (event.target as HTMLElement).dataset.answerRevealLast === "true") onRevealComplete?.();
+      }}
+      className="space-y-4 break-words [&_blockquote]:border-l-4 [&_blockquote]:border-primary/35 [&_blockquote]:pl-4 [&_blockquote]:italic [&_blockquote]:text-[#4e5966] [&_code]:rounded [&_code]:bg-surface-container-low [&_code]:px-1.5 [&_code]:py-0.5 [&_code]:text-[0.9em] [&_h1]:mt-6 [&_h1]:text-2xl [&_h1]:font-bold [&_h1]:leading-tight [&_h1]:text-primary [&_h2]:mt-5 [&_h2]:text-xl [&_h2]:font-bold [&_h2]:leading-tight [&_h2]:text-primary [&_h3]:mt-4 [&_h3]:text-lg [&_h3]:font-bold [&_h3]:text-primary [&_h4]:font-bold [&_h4]:text-primary [&_li]:pl-1 [&_ol]:ml-6 [&_ol]:list-decimal [&_ol]:space-y-1.5 [&_p]:leading-7 [&_pre]:overflow-x-auto [&_pre]:rounded [&_pre]:border [&_pre]:border-outline-variant [&_pre]:bg-surface-container-lowest [&_pre]:p-3 [&_pre]:text-[14px] [&_pre_code]:bg-transparent [&_pre_code]:p-0 [&_table]:min-w-full [&_table]:border-collapse [&_table]:text-left [&_table]:text-[14px] [&_td]:border-b [&_td]:border-outline-variant/70 [&_td]:px-3 [&_td]:py-2 [&_th]:border-b [&_th]:border-outline-variant [&_th]:bg-surface-container-low [&_th]:px-3 [&_th]:py-2 [&_th]:font-bold [&_ul]:ml-6 [&_ul]:list-disc [&_ul]:space-y-1.5 [&_ul_ul]:list-[circle]">
       <ReactMarkdown
         remarkPlugins={[remarkGfm, [remarkCitations, { sources }]]}
+        rehypePlugins={revealing ? [rehypeAnswerReveal] : []}
         skipHtml
         components={{
-          a({ children, href }) {
+          a({ children, href, className, style }) {
             const match = href?.match(/^#citation-(\d+)$/);
             const source = match ? sourcesByCitation.get(Number(match[1])) : undefined;
             if (source && match) {
               return (
                 <button
                   aria-label={`Open source ${match[1]}: ${source.display_source}`}
-                  className="mx-0.5 inline-flex min-h-7 min-w-5 items-center justify-center rounded bg-[#edf8f1] px-1 align-baseline text-[0.8em] font-bold text-primary underline decoration-primary/40 underline-offset-2 hover:bg-[#dcefe4]"
+                  style={style}
+                  className={`${className ?? ""} mx-0.5 inline-flex min-h-7 min-w-5 items-center justify-center rounded bg-[#edf8f1] px-1 align-baseline text-[0.8em] font-bold text-primary underline decoration-primary/40 underline-offset-2 hover:bg-[#dcefe4]`}
                   onClick={() => onSelectSource(source)}
                   type="button"
                 >
@@ -153,15 +172,16 @@ export function MarkdownContent({
               );
             }
 
+            if (httpsLinksOnly && !safeHttpsUrl(href)) return <span className={className} style={style}>{children}</span>;
             return (
-              <a className="font-semibold text-primary underline" href={href} rel="noreferrer" target="_blank">
+              <a style={style} className={`${className ?? ""} font-semibold text-primary underline`} href={href} rel="noopener noreferrer" target="_blank">
                 {children}
               </a>
             );
           },
-          table({ children }) {
+          table({ children, className, style }) {
             return (
-              <div className="overflow-x-auto rounded border border-outline-variant">
+              <div style={style} className={`${className ?? ""} overflow-x-auto rounded border border-outline-variant`}>
                 <table>{children}</table>
               </div>
             );

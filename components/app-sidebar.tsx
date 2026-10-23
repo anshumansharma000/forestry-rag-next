@@ -150,7 +150,8 @@ export function AppSidebar({
                   Aranyabodh AI
                 </p>
                 <p className="mt-1 text-[12px] leading-4 text-[#626b79]">
-                  Forest Diversion knowledge assistant
+                  Knowledge Assistant on Forest Land Diversion for Non-Forest
+                  Use
                 </p>
               </div>
             </a>

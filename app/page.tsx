@@ -32,7 +32,7 @@ const steps = [
     number: "02",
     icon: Search,
     title: "Find the relevant guidance",
-    text: "Explore an answer grounded in the documents available to your department.",
+    text: "Explore an answer grounded in the official documents.",
   },
   {
     number: "03",
@@ -64,7 +64,7 @@ export default function LandingPage() {
                 Aranyabodh AI
               </p>
               <p className="mt-0.5 hidden text-xs text-[#738078] sm:block">
-                Forest diversion knowledge assistant
+                Knowledge Assistant on Forest Land Diversion for Non-Forest Use
               </p>
             </div>
           </a>
@@ -103,7 +103,7 @@ export default function LandingPage() {
               id="hero-title"
               className="mt-6 max-w-xl text-[44px] font-semibold leading-[1.09] tracking-[-0.045em] text-primary sm:text-[58px] lg:text-[64px]"
             >
-              Forestry knowledge.
+              Forestry Knowledge,
               <br />
               <span className="text-[#63816d]">
                 Clarity for
@@ -111,9 +111,9 @@ export default function LandingPage() {
               </span>
             </h1>
             <p className="mt-6 max-w-[430px] text-base leading-7 text-[#607368] sm:text-[17px]">
-              From rules and procedures to department records, find the guidance
-              you need. Ask a question. Understand the answer. Follow the
-              source.
+              Find Guidance from Policies, Acts, Rules, Notifications,
+              Procedures, Guidelines, Court Matters, and more; Refer to sources
+              behind each answer.
             </p>
             <div className="mt-8 flex flex-wrap items-center gap-x-6 gap-y-3">
               <a
@@ -133,7 +133,7 @@ export default function LandingPage() {
             </div>
             <p className="mt-5 flex items-center gap-2 text-xs leading-5 text-[#738078]">
               <ShieldCheck aria-hidden="true" className="h-4 w-4 shrink-0" />{" "}
-              Access with your department account
+              Access with your account
             </p>
           </div>
 
@@ -184,7 +184,7 @@ export default function LandingPage() {
               </div>
             </div>
             <div className="mt-4 flex items-center justify-between gap-3 rounded-xl border border-[#dce6de] bg-white/70 px-4 py-3 text-xs text-[#738078]">
-              <span>Ask about your department’s documents</span>
+              <span>Ask about forest department’s documents</span>
               <span className="grid h-7 w-7 shrink-0 place-items-center rounded-lg bg-primary text-white">
                 <ArrowUp aria-hidden="true" className="h-4 w-4" />
               </span>
@@ -205,7 +205,7 @@ export default function LandingPage() {
               A starting point for your questions
             </p>
             {[
-              "Forestry rules",
+              "Forest Diversion rules",
               "Department procedures",
               "Policy & guidance",
               "Department records",
@@ -285,8 +285,8 @@ export default function LandingPage() {
                 <span className="text-[#63816d]">The source is essential.</span>
               </h2>
               <p className="mt-5 max-w-sm text-sm leading-7 text-[#607368]">
-                Aranyabodh brings your department’s knowledge closer to the work
-                you do, with supporting references you can open and review.
+                Aranyabodh brings forest department’s knowledge closer to the
+                work you do, with supporting references you can open and review.
               </p>
             </div>
             <div className="space-y-7 p-7 sm:p-10">
@@ -300,8 +300,8 @@ export default function LandingPage() {
                   text: "Revisit your chat history and build on the questions you have already explored.",
                 },
                 {
-                  title: "Your department’s knowledge, together",
-                  text: "Work from a shared document library, maintained by your department’s knowledge managers.",
+                  title: "Forest department’s knowledge, together",
+                  text: "Work from a shared document library, maintained by the department’s knowledge managers.",
                 },
               ].map(({ title, text }) => (
                 <div key={title} className="flex gap-3">
@@ -339,7 +339,7 @@ export default function LandingPage() {
                 Put your next question to work.
               </h2>
               <p className="mt-3 text-sm leading-6 text-[#b6cbbd]">
-                Sign in with your department account to get started.
+                Sign in with your account to get started.
               </p>
             </div>
             <a

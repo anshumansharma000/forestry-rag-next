@@ -679,6 +679,13 @@ export function completeDocumentUploads(
   });
 }
 
+export function deleteDocument(token: string, documentId: string) {
+  return apiRequest<{ status: "deleted"; document_id: string }>(
+    `/documents/${encodeURIComponent(documentId)}`,
+    { method: "DELETE", token },
+  );
+}
+
 export function listDocuments(
   token: string,
   params: DocumentLibraryParams,

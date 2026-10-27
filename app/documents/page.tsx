@@ -13,6 +13,7 @@ import {
 import { useCallback, useEffect, useRef, useState } from "react";
 import { SidebarPageShell } from "../../components/app-sidebar";
 import { useDocumentCategories } from "../../components/categorization-fields";
+import { DocumentDeleteDialog } from "../../components/document-delete-dialog";
 import { DocumentMetadataReview } from "../../components/document-metadata-review";
 import { categoryLabel, DocumentCategory } from "../../lib/document-categorization";
 import { ensureFreshAuth, formatApiError, loadStoredSession } from "../../lib/auth-client";
@@ -22,6 +23,7 @@ import {
   DocumentLibraryResponse,
   getIngestJob,
   listDocuments,
+  deleteDocument,
   startIngest,
 } from "../../lib/api";
 import {
@@ -96,6 +98,8 @@ export default function DocumentsPage() {
   const [reviewFilter, setReviewFilter] = useState<LegalReviewStatus | "" | "needs_review">("");
   const [legalDocument, setLegalDocument] = useState<DocumentLibraryItem | null>(null);
   const [metadataDocument, setMetadataDocument] = useState<DocumentLibraryItem | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<DocumentLibraryItem | null>(null);
+  const [deleteNotice, setDeleteNotice] = useState<string | null>(null);
   const categoryCatalog = useDocumentCategories(auth?.access_token);
   const authRef = useRef<AuthState | null>(null);
   const dataRef = useRef<DocumentLibraryResponse | null>(null);
@@ -244,6 +248,23 @@ export default function DocumentsPage() {
       controller.abort();
     };
   }, [auth, categoryCatalog.status, commitQuery, query, retryKey]);
+
+  const confirmDelete = async (document: DocumentLibraryItem) => {
+    const current = authRef.current;
+    if (!current || current.user.role !== "admin") throw new Error("Admin access is required.");
+    const fresh = await ensureFreshAuth(current);
+    authRef.current = fresh;
+    setAuth(fresh);
+    await deleteDocument(fresh.access_token, document.id);
+    // Discard stale rows immediately, then reload totals and adjust pagination.
+    dataRef.current = null;
+    setData(null);
+    setDeleteTarget(null);
+    setMetadataDocument(null);
+    setLegalDocument(null);
+    setDeleteNotice(`${document.filename} was deleted.`);
+    setRetryKey(value => value + 1);
+  };
 
   const setControl = (update: Partial<DocumentLibraryQuery>) =>
     commitQuery({ ...update, offset: 0 });
@@ -479,8 +500,8 @@ export default function DocumentsPage() {
             <div className="rounded border border-dashed border-outline-variant bg-white p-8 text-center"><h2 className="font-bold">No documents on this page match the legal filters</h2><p className="mt-2 text-sm text-[#626b79]">Clear the page-scoped legal filters or move to another document page.</p></div>
           ) : data ? (
             <>
-              <DocumentTable canRetry={canIngestDocuments(auth?.user.role)} documents={visibleDocuments} legalAdmin={legalAdmin} legalReady={legalAnnotationsReady} onLegalReview={setLegalDocument} onMetadataReview={canIngestDocuments(auth?.user.role) && categoryCatalog.status === "available" ? setMetadataDocument : undefined} onRetry={retryDocument} retryStates={retryStates} />
-              <DocumentCards canRetry={canIngestDocuments(auth?.user.role)} documents={visibleDocuments} legalAdmin={legalAdmin} legalReady={legalAnnotationsReady} onLegalReview={setLegalDocument} onMetadataReview={canIngestDocuments(auth?.user.role) && categoryCatalog.status === "available" ? setMetadataDocument : undefined} onRetry={retryDocument} retryStates={retryStates} />
+              <DocumentTable onDelete={auth?.user.role === "admin" ? setDeleteTarget : undefined} canRetry={canIngestDocuments(auth?.user.role)} documents={visibleDocuments} legalAdmin={legalAdmin} legalReady={legalAnnotationsReady} onLegalReview={setLegalDocument} onMetadataReview={canIngestDocuments(auth?.user.role) && categoryCatalog.status === "available" ? setMetadataDocument : undefined} onRetry={retryDocument} retryStates={retryStates} />
+              <DocumentCards onDelete={auth?.user.role === "admin" ? setDeleteTarget : undefined} canRetry={canIngestDocuments(auth?.user.role)} documents={visibleDocuments} legalAdmin={legalAdmin} legalReady={legalAnnotationsReady} onLegalReview={setLegalDocument} onMetadataReview={canIngestDocuments(auth?.user.role) && categoryCatalog.status === "available" ? setMetadataDocument : undefined} onRetry={retryDocument} retryStates={retryStates} />
             </>
           ) : null}
         </section>
@@ -513,6 +534,8 @@ export default function DocumentsPage() {
           </footer>
         ) : null}
       </div>
+      {deleteNotice ? <p className="mt-4 text-sm text-primary" role="status">{deleteNotice}</p> : null}
+      {deleteTarget ? <DocumentDeleteDialog document={deleteTarget} onClose={() => setDeleteTarget(null)} onDelete={confirmDelete} /> : null}
       {metadataDocument && auth ? <DocumentMetadataReview key={metadataDocument.id} document={metadataDocument}
         categories={categoryCatalog.categories} getToken={getMetadataToken} onClose={() => setMetadataDocument(null)}
         onSaved={categorization => {
@@ -548,13 +571,14 @@ function SelectControl({ children, disabled = false, grow = false, label, onChan
   );
 }
 
-function DocumentTable({ canRetry, documents, legalAdmin, legalReady, onLegalReview, onMetadataReview, onRetry, retryStates }: {
+function DocumentTable({ canRetry, documents, legalAdmin, legalReady, onLegalReview, onMetadataReview, onRetry, retryStates, onDelete }: {
   canRetry: boolean;
   documents: AnnotatedDocument[];
   legalAdmin: boolean;
   legalReady: boolean;
   onLegalReview: (document: DocumentLibraryItem) => void;
   onMetadataReview?: (document: DocumentLibraryItem) => void;
+  onDelete?: (document: DocumentLibraryItem) => void;
   onRetry: (document: DocumentLibraryItem) => void;
   retryStates: Record<string, RetryUpdate>;
 }) {
@@ -578,6 +602,7 @@ function DocumentTable({ canRetry, documents, legalAdmin, legalReady, onLegalRev
                 <td className="px-4 py-4">
                   <p className="break-words text-[14px] font-bold leading-5 text-[#151a18]">{displayTitle(document)}</p>
                   <p className="mt-1 break-all text-[12px] leading-4 text-[#737c88]">{document.filename}</p>
+                  {onDelete ? <button type="button" className="mt-2 min-h-11 text-sm font-semibold text-red-700 hover:underline" aria-label={`Delete ${document.filename}`} onClick={() => onDelete(document)}>Delete</button> : null}
                 </td>
                 <td className="px-4 py-4"><TypeCell document={document} onMetadataReview={onMetadataReview} /></td>
                 <td className="px-4 py-4"><AuthorityCell document={document} /></td>
@@ -593,13 +618,14 @@ function DocumentTable({ canRetry, documents, legalAdmin, legalReady, onLegalRev
   );
 }
 
-function DocumentCards({ canRetry, documents, legalAdmin, legalReady, onLegalReview, onMetadataReview, onRetry, retryStates }: {
+function DocumentCards({ canRetry, documents, legalAdmin, legalReady, onLegalReview, onMetadataReview, onRetry, retryStates, onDelete }: {
   canRetry: boolean;
   documents: AnnotatedDocument[];
   legalAdmin: boolean;
   legalReady: boolean;
   onLegalReview: (document: DocumentLibraryItem) => void;
   onMetadataReview?: (document: DocumentLibraryItem) => void;
+  onDelete?: (document: DocumentLibraryItem) => void;
   onRetry: (document: DocumentLibraryItem) => void;
   retryStates: Record<string, RetryUpdate>;
 }) {
@@ -612,6 +638,7 @@ function DocumentCards({ canRetry, documents, legalAdmin, legalReady, onLegalRev
             <div className="min-w-0">
               <h3 className="break-words text-[15px] font-bold leading-5 text-[#151a18]">{displayTitle(document)}</h3>
               <p className="mt-1 break-all text-[12px] leading-4 text-[#737c88]">{document.filename}</p>
+                  {onDelete ? <button type="button" className="mt-2 min-h-11 text-sm font-semibold text-red-700 hover:underline" aria-label={`Delete ${document.filename}`} onClick={() => onDelete(document)}>Delete</button> : null}
             </div>
           </div>
           <dl className="mt-4 grid grid-cols-2 gap-x-4 gap-y-3 border-t border-outline-variant pt-4 text-[13px]">

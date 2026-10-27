@@ -3,7 +3,7 @@
 import { X } from "lucide-react";
 import React, { useEffect, useId, useRef, type ReactNode } from "react";
 
-export function SidePanel({ title, onClose, children, busy = false, centered = false }: { title: string; onClose: () => void; children: ReactNode; busy?: boolean; centered?: boolean }) {
+export function SidePanel({ title, onClose, children, busy = false, centered = false, wide = false }: { title: string; onClose: () => void; children: ReactNode; busy?: boolean; centered?: boolean; wide?: boolean }) {
   const titleId = useId();
   const panel = useRef<HTMLDivElement>(null);
   const closeButton = useRef<HTMLButtonElement>(null);
@@ -36,7 +36,7 @@ export function SidePanel({ title, onClose, children, busy = false, centered = f
 
   return (
     <div className={`fixed inset-0 z-50 flex bg-black/30 ${centered ? "items-center justify-center p-4" : "justify-end"}`} onMouseDown={(event) => { if (event.target === event.currentTarget && !busy) onClose(); }}>
-      <div ref={panel} role="dialog" aria-modal="true" aria-labelledby={titleId} className={`flex w-full flex-col bg-white shadow-xl ${centered ? "max-h-[85vh] max-w-xl rounded-2xl" : "h-full max-w-lg"}`}>
+      <div ref={panel} role="dialog" aria-modal="true" aria-labelledby={titleId} className={`flex w-full flex-col bg-white shadow-xl ${centered ? (wide ? "h-[95dvh] max-w-[1600px] rounded-2xl" : "max-h-[85vh] max-w-xl rounded-2xl") : "h-full max-w-lg"}`}>
         <div className="flex shrink-0 items-center justify-between border-b border-outline-variant/60 px-6 py-4">
           <h2 id={titleId} className="text-xl font-semibold text-primary">{title}</h2>
           <button ref={closeButton} aria-label={`Close ${title.toLowerCase()}`} className="grid h-11 w-11 place-items-center rounded-lg hover:bg-surface-container-low disabled:opacity-50" disabled={busy} onClick={onClose} type="button"><X className="h-5 w-5" /></button>

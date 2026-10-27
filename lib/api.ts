@@ -504,11 +504,13 @@ export async function getMessages(token: string, sessionId: string) {
 export async function downloadSourceDocument(
   token: string,
   documentId: string,
+  signal?: AbortSignal,
 ): Promise<Blob> {
   const response = await fetch(
     `${API_BASE_URL}/documents/${encodeURIComponent(documentId)}/download`,
     {
       headers: { Authorization: `Bearer ${token}` },
+      ...(signal ? { signal } : {}),
     },
   );
 
@@ -683,6 +685,28 @@ export function deleteDocument(token: string, documentId: string) {
   return apiRequest<{ status: "deleted"; document_id: string }>(
     `/documents/${encodeURIComponent(documentId)}`,
     { method: "DELETE", token },
+  );
+}
+
+export type DocumentPreviewSection = {
+  chunk_index: number;
+  section_heading: string | null;
+  page_start: number | null;
+  page_end: number | null;
+  content: string;
+};
+
+export type DocumentPreview = {
+  document_id: string;
+  filename: string;
+  sections: DocumentPreviewSection[];
+  next_offset: number | null;
+};
+
+export function getDocumentPreview(token: string, documentId: string, offset = 0, signal?: AbortSignal) {
+  return apiRequest<DocumentPreview>(
+    `/documents/${encodeURIComponent(documentId)}/preview?offset=${offset}&limit=40`,
+    { token, signal },
   );
 }
 

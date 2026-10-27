@@ -13,6 +13,7 @@ import {
 import { useCallback, useEffect, useRef, useState } from "react";
 import { SidebarPageShell } from "../../components/app-sidebar";
 import { useDocumentCategories } from "../../components/categorization-fields";
+import { DocumentFilePreview } from "../../components/document-file-preview";
 import { DocumentDeleteDialog } from "../../components/document-delete-dialog";
 import { DocumentMetadataReview } from "../../components/document-metadata-review";
 import { categoryLabel, DocumentCategory } from "../../lib/document-categorization";
@@ -98,6 +99,7 @@ export default function DocumentsPage() {
   const [reviewFilter, setReviewFilter] = useState<LegalReviewStatus | "" | "needs_review">("");
   const [legalDocument, setLegalDocument] = useState<DocumentLibraryItem | null>(null);
   const [metadataDocument, setMetadataDocument] = useState<DocumentLibraryItem | null>(null);
+  const [viewTarget, setViewTarget] = useState<DocumentLibraryItem | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<DocumentLibraryItem | null>(null);
   const [deleteNotice, setDeleteNotice] = useState<string | null>(null);
   const categoryCatalog = useDocumentCategories(auth?.access_token);
@@ -249,6 +251,15 @@ export default function DocumentsPage() {
     };
   }, [auth, categoryCatalog.status, commitQuery, query, retryKey]);
 
+  const getPreviewToken = useCallback(async () => {
+    const current = authRef.current;
+    if (!current || current.user.role !== "admin") throw new Error("Admin access is required.");
+    const fresh = await ensureFreshAuth(current);
+    authRef.current = fresh;
+    setAuth(fresh);
+    return fresh.access_token;
+  }, []);
+
   const confirmDelete = async (document: DocumentLibraryItem) => {
     const current = authRef.current;
     if (!current || current.user.role !== "admin") throw new Error("Admin access is required.");
@@ -260,6 +271,7 @@ export default function DocumentsPage() {
     dataRef.current = null;
     setData(null);
     setDeleteTarget(null);
+    setViewTarget(null);
     setMetadataDocument(null);
     setLegalDocument(null);
     setDeleteNotice(`${document.filename} was deleted.`);
@@ -500,8 +512,8 @@ export default function DocumentsPage() {
             <div className="rounded border border-dashed border-outline-variant bg-white p-8 text-center"><h2 className="font-bold">No documents on this page match the legal filters</h2><p className="mt-2 text-sm text-[#626b79]">Clear the page-scoped legal filters or move to another document page.</p></div>
           ) : data ? (
             <>
-              <DocumentTable onDelete={auth?.user.role === "admin" ? setDeleteTarget : undefined} canRetry={canIngestDocuments(auth?.user.role)} documents={visibleDocuments} legalAdmin={legalAdmin} legalReady={legalAnnotationsReady} onLegalReview={setLegalDocument} onMetadataReview={canIngestDocuments(auth?.user.role) && categoryCatalog.status === "available" ? setMetadataDocument : undefined} onRetry={retryDocument} retryStates={retryStates} />
-              <DocumentCards onDelete={auth?.user.role === "admin" ? setDeleteTarget : undefined} canRetry={canIngestDocuments(auth?.user.role)} documents={visibleDocuments} legalAdmin={legalAdmin} legalReady={legalAnnotationsReady} onLegalReview={setLegalDocument} onMetadataReview={canIngestDocuments(auth?.user.role) && categoryCatalog.status === "available" ? setMetadataDocument : undefined} onRetry={retryDocument} retryStates={retryStates} />
+              <DocumentTable onView={auth?.user.role === "admin" ? setViewTarget : undefined} onDelete={auth?.user.role === "admin" ? setDeleteTarget : undefined} canRetry={canIngestDocuments(auth?.user.role)} documents={visibleDocuments} legalAdmin={legalAdmin} legalReady={legalAnnotationsReady} onLegalReview={setLegalDocument} onMetadataReview={canIngestDocuments(auth?.user.role) && categoryCatalog.status === "available" ? setMetadataDocument : undefined} onRetry={retryDocument} retryStates={retryStates} />
+              <DocumentCards onView={auth?.user.role === "admin" ? setViewTarget : undefined} onDelete={auth?.user.role === "admin" ? setDeleteTarget : undefined} canRetry={canIngestDocuments(auth?.user.role)} documents={visibleDocuments} legalAdmin={legalAdmin} legalReady={legalAnnotationsReady} onLegalReview={setLegalDocument} onMetadataReview={canIngestDocuments(auth?.user.role) && categoryCatalog.status === "available" ? setMetadataDocument : undefined} onRetry={retryDocument} retryStates={retryStates} />
             </>
           ) : null}
         </section>
@@ -535,6 +547,7 @@ export default function DocumentsPage() {
         ) : null}
       </div>
       {deleteNotice ? <p className="mt-4 text-sm text-primary" role="status">{deleteNotice}</p> : null}
+      {viewTarget ? <DocumentFilePreview key={viewTarget.id} document={viewTarget} getToken={getPreviewToken} onClose={() => setViewTarget(null)} /> : null}
       {deleteTarget ? <DocumentDeleteDialog document={deleteTarget} onClose={() => setDeleteTarget(null)} onDelete={confirmDelete} /> : null}
       {metadataDocument && auth ? <DocumentMetadataReview key={metadataDocument.id} document={metadataDocument}
         categories={categoryCatalog.categories} getToken={getMetadataToken} onClose={() => setMetadataDocument(null)}
@@ -571,7 +584,7 @@ function SelectControl({ children, disabled = false, grow = false, label, onChan
   );
 }
 
-function DocumentTable({ canRetry, documents, legalAdmin, legalReady, onLegalReview, onMetadataReview, onRetry, retryStates, onDelete }: {
+function DocumentTable({ canRetry, documents, legalAdmin, legalReady, onLegalReview, onMetadataReview, onRetry, retryStates, onDelete, onView }: {
   canRetry: boolean;
   documents: AnnotatedDocument[];
   legalAdmin: boolean;
@@ -579,6 +592,7 @@ function DocumentTable({ canRetry, documents, legalAdmin, legalReady, onLegalRev
   onLegalReview: (document: DocumentLibraryItem) => void;
   onMetadataReview?: (document: DocumentLibraryItem) => void;
   onDelete?: (document: DocumentLibraryItem) => void;
+  onView?: (document: DocumentLibraryItem) => void;
   onRetry: (document: DocumentLibraryItem) => void;
   retryStates: Record<string, RetryUpdate>;
 }) {
@@ -602,7 +616,10 @@ function DocumentTable({ canRetry, documents, legalAdmin, legalReady, onLegalRev
                 <td className="px-4 py-4">
                   <p className="break-words text-[14px] font-bold leading-5 text-[#151a18]">{displayTitle(document)}</p>
                   <p className="mt-1 break-all text-[12px] leading-4 text-[#737c88]">{document.filename}</p>
-                  {onDelete ? <button type="button" className="mt-2 min-h-11 text-sm font-semibold text-red-700 hover:underline" aria-label={`Delete ${document.filename}`} onClick={() => onDelete(document)}>Delete</button> : null}
+                  <div className="mt-2 flex items-center gap-5">
+                    {onView ? <button type="button" className="min-h-11 text-sm font-semibold text-primary hover:underline" aria-label={`View ${document.filename}`} onClick={() => onView(document)}>View</button> : null}
+                    {onDelete ? <button type="button" className="min-h-11 text-sm font-semibold text-red-700 hover:underline" aria-label={`Delete ${document.filename}`} onClick={() => onDelete(document)}>Delete</button> : null}
+                  </div>
                 </td>
                 <td className="px-4 py-4"><TypeCell document={document} onMetadataReview={onMetadataReview} /></td>
                 <td className="px-4 py-4"><AuthorityCell document={document} /></td>
@@ -618,7 +635,7 @@ function DocumentTable({ canRetry, documents, legalAdmin, legalReady, onLegalRev
   );
 }
 
-function DocumentCards({ canRetry, documents, legalAdmin, legalReady, onLegalReview, onMetadataReview, onRetry, retryStates, onDelete }: {
+function DocumentCards({ canRetry, documents, legalAdmin, legalReady, onLegalReview, onMetadataReview, onRetry, retryStates, onDelete, onView }: {
   canRetry: boolean;
   documents: AnnotatedDocument[];
   legalAdmin: boolean;
@@ -626,6 +643,7 @@ function DocumentCards({ canRetry, documents, legalAdmin, legalReady, onLegalRev
   onLegalReview: (document: DocumentLibraryItem) => void;
   onMetadataReview?: (document: DocumentLibraryItem) => void;
   onDelete?: (document: DocumentLibraryItem) => void;
+  onView?: (document: DocumentLibraryItem) => void;
   onRetry: (document: DocumentLibraryItem) => void;
   retryStates: Record<string, RetryUpdate>;
 }) {
@@ -638,7 +656,10 @@ function DocumentCards({ canRetry, documents, legalAdmin, legalReady, onLegalRev
             <div className="min-w-0">
               <h3 className="break-words text-[15px] font-bold leading-5 text-[#151a18]">{displayTitle(document)}</h3>
               <p className="mt-1 break-all text-[12px] leading-4 text-[#737c88]">{document.filename}</p>
-                  {onDelete ? <button type="button" className="mt-2 min-h-11 text-sm font-semibold text-red-700 hover:underline" aria-label={`Delete ${document.filename}`} onClick={() => onDelete(document)}>Delete</button> : null}
+                  <div className="mt-2 flex items-center gap-5">
+                    {onView ? <button type="button" className="min-h-11 text-sm font-semibold text-primary hover:underline" aria-label={`View ${document.filename}`} onClick={() => onView(document)}>View</button> : null}
+                    {onDelete ? <button type="button" className="min-h-11 text-sm font-semibold text-red-700 hover:underline" aria-label={`Delete ${document.filename}`} onClick={() => onDelete(document)}>Delete</button> : null}
+                  </div>
             </div>
           </div>
           <dl className="mt-4 grid grid-cols-2 gap-x-4 gap-y-3 border-t border-outline-variant pt-4 text-[13px]">
